@@ -3,9 +3,18 @@
 Bump `config.PROMPT_VERSION` on any edit to `SYSTEM_PROMPT`'s text; it is
 recorded in every report's `metadata.json` (`llm.prompt_version`) and in
 every `payload.json` (`Payload.prompt_version`) so results stay comparable
-across prompt revisions. A6 adds a test that catches an edit here without a
-matching version bump (build plan A6: "Editing the prompt without bumping
-PROMPT_VERSION fails a test") — not enforced yet in A5.
+across prompt revisions.
+
+`SYSTEM_PROMPT_SHA256` pins the hash of `SYSTEM_PROMPT` as of the *current*
+`config.PROMPT_VERSION` default ("v1.0"). `tests/test_prompt_version.py`
+recomputes the hash and fails if it doesn't match — the enforcement build
+plan A6 calls for ("Editing the prompt without bumping PROMPT_VERSION
+fails a test"). If you edit `SYSTEM_PROMPT`: bump `PROMPT_VERSION` in
+`config.py`, then update `SYSTEM_PROMPT_SHA256` below to match the new
+text (the failing test tells you the value it computed — copy that in).
+This is a deliberate manual step, not automated, because the whole point
+is a human decision ("yes, this is a real prompt revision") between the
+edit and the version bump becoming official.
 
 The 금지 규칙 (prohibition) block is the part that determines report
 quality — see spec §9's note: it prevents two failure modes, inventing
@@ -18,6 +27,8 @@ Called by: `llm/client.py::generate_report`, as the API request's system message
 """
 
 from __future__ import annotations
+
+SYSTEM_PROMPT_SHA256 = "cd53b38ba52038520a6937a45bdb0d277b407c3d79197b81287fce77d03e6e05"
 
 SYSTEM_PROMPT = """당신은 농업 생육 진단 보조 시스템이다.
 스마트 순찰 로버가 1회 순찰에서 수집한 데이터를 해석하여 진단 리포트의

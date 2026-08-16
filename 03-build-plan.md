@@ -210,6 +210,40 @@ The emergency-stop test is the important one. Write it first.
 
 `regenerate` matters more than its size suggests. Prompt tuning takes dozens of iterations and re-running the rover for each is not viable.
 
+> [!FLAG] **Done 2026-08-17.** All acceptance criteria met and tested
+> (`tests/test_cli_regenerate.py`, `tests/test_prompt_version.py`, plus
+> two new tests in `tests/test_payload.py` for `load_payload`/
+> `payload_to_aggregate`). Notes on how each criterion landed:
+> - "Simulated 429 retries three times with exponential backoff, then
+>   falls back" was already fully built and tested in A5
+>   (`test_retries_exhausted_falls_back_gracefully`) — the retry/backoff
+>   logic lives in `llm/client.py` regardless of which caller (fresh build
+>   or regenerate) triggers it, so there was nothing A6-specific left to add.
+> - "Fallback report has all six sections and `llm.enabled: false`" is
+>   proven specifically *through* `regenerate` in
+>   `test_regenerate_falls_back_gracefully_when_llm_fails`, not just
+>   through `render_report` directly (already covered since A3).
+> - `regenerate` needed one real design change, not just new code:
+>   `render_report` used to require a whole `PatrolSegmentation` just to
+>   call `.obstruction_counts()` on it — but regeneration has no
+>   segmentation, only a stored `Payload` (whose `.obstructions` field is
+>   already that exact dict). Narrowing `render_report`'s parameter from
+>   the object to the one value it used fixed this. See `ai_report/CALL_MAP.md`.
+> - `regenerate` hit the *same* images-discarded-by-atomic-swap bug A4
+>   found independently: `_load_report_images` read the old report's
+>   `images/` into memory, but nothing wrote them into the new tmp
+>   directory before the swap, so they vanished. Fixed with `_write_images`
+>   as another `write_report(..., extra_writers=[...])` entry — same
+>   pattern as A4's fix, same root cause, caught the same way: an
+>   end-to-end smoke test (this one deleted `data/` entirely and ran
+>   `ai-report regenerate` as a real subprocess), not a unit test.
+> - The prompt-version-bump test pins `hashlib.sha256(SYSTEM_PROMPT)` in
+>   `llm/prompts.py::SYSTEM_PROMPT_SHA256`; `tests/test_prompt_version.py`
+>   fails if `SYSTEM_PROMPT` changes without that hash being updated —
+>   verified in both directions (deliberately broke it, confirmed the
+>   test failed with a helpful message; restored it, confirmed it passed
+>   again).
+
 ---
 
 ## A7 (optional, v2) — Cross-patrol trends

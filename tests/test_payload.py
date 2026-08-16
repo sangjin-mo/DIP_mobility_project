@@ -14,7 +14,13 @@ from ai_report.models import (
     ZoneEnv,
     ZoneMetadata,
 )
-from ai_report.pipeline.payload import build_payload, estimate_tokens, write_payload
+from ai_report.pipeline.payload import (
+    build_payload,
+    estimate_tokens,
+    load_payload,
+    payload_to_aggregate,
+    write_payload,
+)
 from ai_report.pipeline.segment import PatrolSegmentation, ZoneWindow
 
 PATROL_ID = "20260813_1430"
@@ -138,3 +144,34 @@ def test_write_payload_creates_valid_json_file(tmp_path: Path):
     assert out == tmp_path / "payload.json"
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["patrol_id"] == PATROL_ID
+
+
+def test_load_payload_round_trips_write_payload(tmp_path: Path):
+    agg = make_agg([zone(1, ["a", "b"])])
+    payload, _ = build_payload(agg, make_segmentation(), get_settings())
+    out = write_payload(payload, tmp_path)
+    loaded = load_payload(out)
+    assert loaded == payload
+
+
+def test_payload_to_aggregate_reconstructs_matching_fields():
+    agg = make_agg([zone(1, ["a"])])
+    payload, _ = build_payload(agg, make_segmentation(), get_settings())
+    reconstructed = payload_to_aggregate(payload)
+    assert reconstructed.patrol_id == agg.patrol_id
+    assert reconstructed.patrol_date == agg.patrol_date
+    assert reconstructed.duration_min == agg.duration_min
+    assert reconstructed.overall_status == agg.overall_status
+    assert reconstructed.data_completeness == agg.data_completeness
+    assert reconstructed.zones == payload.zones  # includes the (possibly truncated) image_ids
+
+
+def test_payload_to_aggregate_llm_is_disabled_placeholder():
+    """The real llm.enabled=True gets merged in by the caller after a fresh
+    generate_report() call — payload_to_aggregate itself never claims a
+    call already happened.
+    """
+    agg = make_agg([zone(1, [])])
+    payload, _ = build_payload(agg, make_segmentation(), get_settings())
+    reconstructed = payload_to_aggregate(payload)
+    assert reconstructed.llm.enabled is False

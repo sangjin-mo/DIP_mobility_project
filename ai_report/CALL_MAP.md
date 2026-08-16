@@ -3,25 +3,26 @@
 Which function calls which, and who runs each module. Covers A1
 (`ingest/` + `devtools/`), A2 (`pipeline/segment.py`, `pipeline/aggregate.py`),
 A3 (`render/` + `storage/`), A4 (`pipeline/select_images.py`,
-`pipeline/payload.py`), and A5 (`llm/`). See `../02-ai-subsystem-spec.md`
-§2 for the intended full module layout and `../01-interface-contracts.md`
-for the contracts these modules implement.
+`pipeline/payload.py`), A5 (`llm/`), and A6 (`cli.py regenerate`). See
+`../02-ai-subsystem-spec.md` §2 for the intended full module layout and
+`../01-interface-contracts.md` for the contracts these modules implement.
 
-**There is still no production orchestration.** Nothing in this codebase
-yet calls `segment_patrol` → `aggregate` → `apply_image_selection` →
-`build_payload` → `llm.client.generate_report` → `render_report` →
-`write_report` automatically when a patrol finishes (`PATROL_END` + VIS
-`_COMPLETE`) — that glue is a later addition (likely `cli.py`, once the
-trigger condition needs watching for). Today that whole chain is only
-exercised by tests and by manual scripts, such as the one used to
-smoke-test A2–A5 end to end against a real running server (with a mocked
-OpenAI client — CLAUDE.md's API key is never touched by anything in this
-repo's own test/smoke tooling). See "What's not wired up yet" at the bottom.
+**There is still no production orchestration for a *fresh* patrol.**
+Nothing in this codebase yet calls `segment_patrol` → `aggregate` →
+`apply_image_selection` → `build_payload` → `llm.client.generate_report` →
+`render_report` → `write_report` automatically when a patrol finishes
+(`PATROL_END` + VIS `_COMPLETE`) — that glue is a later addition (likely
+`cli.py`, once the trigger condition needs watching for). `cli.py
+regenerate {patrol_id}` (A6) *is* fully wired production code, but it's a
+different, narrower path — see "The regenerate path" below — that only
+works for a patrol whose `payload.json` already exists from some earlier
+run. Today the fresh-patrol chain is only exercised by tests and by manual
+scripts, such as the one used to smoke-test A2–A5 end to end against a
+real running server (with a mocked OpenAI client — CLAUDE.md's API key is
+never touched by anything in this repo's own test/smoke tooling). See
+"What's not wired up yet" at the bottom.
 
-## Two runtime processes, one shared package
-
-A1 has two independent ways to run the ingest path, both importing the same
-`ai_report` code:
+## Three runtime processes, one shared package
 
 1. **The real server** — `ai_report.cli` (`ai-report serve` / `python -m
    ai_report.cli serve`). Long-running: listens for real DR traffic.
@@ -29,6 +30,10 @@ A1 has two independent ways to run the ingest path, both importing the same
    `devtools/fake_vis.py` run as short-lived scripts that either talk to a
    running server over the network, or (in tests) drive the same listener
    objects in-process on an ephemeral port.
+3. **`ai-report regenerate {patrol_id}`** (A6) — a short-lived command that
+   rebuilds one report from its own stored `payload.json` + `images/`. See
+   "The regenerate path" below; it shares no runtime state with 1 or 2 —
+   no `Store`, no UDP/HTTP listener, no `Settings.DATA_ROOT` access at all.
 
 ```mermaid
 flowchart TB
@@ -111,17 +116,19 @@ network-free. Red is the one stage that touches the network at all
 every test that exercises it, never makes a real call). Three non-obvious
 wiring details:
 
-- `render_report` needing *both* `PatrolAggregate` and `PatrolSegmentation`:
-  `ZoneMetadata` (what `aggregate()` returns per zone) deliberately
-  excludes raw `EMERGENCY_STOP`/`LINE_LOST` event detail because that's not
-  part of `c3-metadata.schema.json` — so the 통로 장애 요인 section (and
-  `Payload.obstructions`) read that detail back out of the segmentation
-  object directly, via `PatrolSegmentation.obstruction_counts()`.
+- `render_report` takes `obstructions: dict[int, dict[str, int]]`, not a
+  `PatrolSegmentation` — it originally took the whole segmentation object
+  just to call `.obstruction_counts()` on it, until A6's `regenerate`
+  needed to call `render_report` with no segmentation available at all
+  (only a stored `Payload`, whose `.obstructions` field is already this
+  exact dict). Narrowing the parameter to what the function actually uses
+  is what made regeneration possible without a bigger rework.
 - `copy_and_resize_images`/`write_payload` must be passed to
   `write_report` via `extra_writers`, **not** called against the final
   report path directly — a real bug (images silently discarded by the
   atomic swap) was found this way during A4's end-to-end smoke test; see
-  the `[!FLAG]` in `storage/layout.py`.
+  the `[!FLAG]` in `storage/layout.py`. `cli.py::_write_images` (A6) is the
+  same pattern again, for `_regenerate`'s reloaded image bytes.
 - `generate_report`'s `LlmMetadata` return value must be merged into
   `PatrolAggregate.llm` (e.g. `agg.model_copy(update={"llm": llm_metadata})`)
   *before* `write_report` runs, so `metadata.json` reflects the real
@@ -130,6 +137,47 @@ wiring details:
   argument takes the *content* (`LlmReportOutput | None`) separately —
   the two are threaded through independently because one goes into
   `metadata.json` and the other only ever appears in `report.md`.
+
+## The regenerate path (A6, fully wired)
+
+Unlike the A2–A5 chain above, this one *is* real production code, callable
+today: `ai-report regenerate {patrol_id}`. It reconstructs everything from
+a previously-written `payload.json` and that report's own `images/`
+directory — no `Store`, no `Settings.DATA_ROOT`, no segmentation.
+
+```mermaid
+flowchart LR
+    CLI["cli.py::_regenerate(patrol_id, report_root)"]
+    CLI --> LOADP["payload.load_payload()"]
+    LOADP -->|"Payload"| TOAGG["payload.payload_to_aggregate()"]
+    CLI --> LOADI["cli._load_report_images()\n(reads report_dir/images/*.jpg)"]
+    TOAGG -->|"PatrolAggregate\n(llm=disabled placeholder)"| GEN["llm.client.generate_report()"]
+    LOADI -->|"images: dict[str, bytes]"| GEN
+    GEN -->|"LlmReportOutput | None,\nLlmMetadata"| REN["render.markdown.render_report()"]
+    TOAGG -->|"PatrolAggregate\n(llm= merged in)"| REN
+    LOADP -->|"Payload.obstructions"| REN
+    REN -->|"Markdown string"| ST["storage.layout.write_report()"]
+    TOAGG -->|"PatrolAggregate"| ST
+    ST -.->|"extra_writers=[...]"| WPAY2["payload.write_payload()"]
+    LOADI -.->|"extra_writers=[...]"| WIMG["cli._write_images()"]
+    ST --> FS2[("reports/{patrol_id}/ — same four files,\nnow from a fresh LLM call")]
+
+    classDef det stroke:#10B981,stroke-width:2px
+    classDef net stroke:#EF4444,stroke-width:2px
+    class LOADP,TOAGG,LOADI,REN,ST det
+    class GEN net
+```
+
+Proven, not just designed this way: an end-to-end smoke test deleted
+`data/` entirely (the directory the original ingest/pipeline run needed)
+and ran `ai-report regenerate 20260813_1430` as a real subprocess against
+only the report directory — it produced a complete, valid report. The
+first version of `_regenerate` had the same images-discarded-by-the-atomic-
+swap bug as A4's `copy_and_resize_images`, independently — `_load_report_images`
+read the old `images/` directory into memory but nothing wrote it back
+into the new one, until `_write_images` was added as another
+`extra_writers` entry. Two different call sites, same underlying mistake,
+caught the same way both times: by an end-to-end smoke test, not a unit test.
 
 ## Per-module function reference
 
@@ -206,7 +254,10 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | Function | Calls | Called by |
 |---|---|---|
 | `_serve` | `get_settings`, `Store`, `create_udp_listener`, `create_app`, `uvicorn.Server.serve` | `main` |
-| `main` | `_serve` (via `asyncio.run`) | the `ai-report` console script; `if __name__ == "__main__"` |
+| `_write_images` | — | passed to `storage/layout.py::write_report` via `extra_writers`, from `_regenerate` |
+| `_load_report_images` | — | `_regenerate` |
+| `_regenerate` | `pipeline/payload.py::load_payload`/`payload_to_aggregate`, `_load_report_images`, `llm/client.py::generate_report`, `render/markdown.py::render_report`, `storage/layout.py::write_report`, `pipeline/payload.py::write_payload`, `_write_images` | `main`; directly by `tests/test_cli_regenerate.py` |
+| `main` | `_serve` or `_regenerate` (via `asyncio.run`, depending on subcommand) | the `ai-report` console script; `if __name__ == "__main__"` |
 
 ### `devtools/fake_rover.py`
 
@@ -264,7 +315,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_build_zone_views` | `_env_line`, `_observation_lines`, `_obstruction_line`, `_recommendation_line`, `_image_note`, `_env_note_suffix` | `render_report` |
 | `_llm_recommendation_lines` | — | `render_report` |
 | `_jinja_env` | `jinja2.Environment(...)` | `render_report` |
-| `render_report` | `PatrolSegmentation.obstruction_counts`, `_build_zone_views`, `_llm_recommendation_lines`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; production caller once orchestration exists |
+| `render_report` | `_build_zone_views`, `_llm_recommendation_lines`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; `cli.py::_regenerate` (A6, real production caller); the fresh-patrol chain's caller doesn't exist yet |
 
 ### `pipeline/select_images.py`
 
@@ -286,6 +337,8 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_truncate_images` | — | `build_payload` |
 | `build_payload` | `PatrolSegmentation.obstruction_counts`, `estimate_tokens`, `_truncate_images`; constructs `Payload` | whatever runs the pipeline for a patrol; `tests/test_payload.py` |
 | `write_payload` | — | passed to `storage/layout.py::write_report` via `extra_writers`; directly by `tests/test_payload.py` |
+| `load_payload` | `Payload.model_validate_json` | `cli.py::_regenerate`; directly by `tests/test_payload.py` |
+| `payload_to_aggregate` | constructs `PatrolAggregate` | `cli.py::_regenerate`; directly by `tests/test_payload.py` |
 
 ### `storage/layout.py`
 
@@ -329,10 +382,20 @@ Nothing yet calls the A2–A5 chain (`segment_patrol` → `aggregate` →
 `render_report` → `write_report`) automatically on `PATROL_END` + VIS
 `_COMPLETE` — see this doc's intro. `VisWatcher.watch` is the other
 still-unwired piece: it exists for A1's polling-until-complete behaviour,
-but nothing calls it outside tests either. All of this is reachable today
-only from tests and from ad hoc scripts, such as the manual smoke test
-(real `ai-report serve` process, real `fake_rover`/`fake_vis` traffic, then
-a short script running the full A1–A5 chain by hand — including a mocked
-`AsyncOpenAI` client, since no test or smoke script in this repo ever makes
-a real LLM call — and `write_report`'s `extra_writers`) used to verify
-A2–A5 end to end.
+but nothing calls it outside tests either. The fresh-patrol chain is
+reachable today only from tests and from ad hoc scripts, such as the
+manual smoke test (real `ai-report serve` process, real
+`fake_rover`/`fake_vis` traffic, then a short script running the full
+A1–A5 chain by hand — including a mocked `AsyncOpenAI` client, since no
+test or smoke script in this repo ever makes a real LLM call — and
+`write_report`'s `extra_writers`) used to verify A2–A5 end to end.
+
+**`cli.py regenerate` is the exception** — it's real, wired, callable
+production code today, verified as an actual subprocess (`python -m
+ai_report.cli regenerate {patrol_id}`) against a report built by the
+fresh-patrol chain, with `data/` deleted first to prove no rover/database
+access happens. What A6 doesn't add: a way to build the *first* report for
+a patrol automatically — `regenerate` only works once a `payload.json`
+already exists from some earlier run (manual, in this repo, until
+orchestration lands) and is meant for prompt-tuning iteration (spec §11),
+not initial report generation.

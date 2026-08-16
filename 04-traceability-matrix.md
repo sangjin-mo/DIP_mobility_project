@@ -24,8 +24,8 @@ Update the Status column as phases complete. This table is what a reviewer check
 | AI_102.2 | 분석 시스템 프롬프트 정의 | spec §9.2 | `llm/prompts.py` | `test_scan_prohibited_language_detects_causal_connectors`, `test_scan_prohibited_language_detects_plant_count_words` | A5 | ✓ |
 | AI_102.3 | 리포트 및 메타데이터 저장 | ICD C3.1 | `storage/layout.py` | `test_no_partial_directory_is_ever_observable_at_the_final_path`, `test_a_failed_write_does_not_touch_an_existing_report` | A3 | ✓ |
 | AI_102.4 † | 리포트 생성 실패 처리 | spec §12 | `llm/client.py` | `test_retries_exhausted_falls_back_gracefully`, `test_no_retry_on_bad_request`, `test_schema_invalid_response_falls_back_gracefully` | A5 | ✓ |
-| AI_102.5 † | 프롬프트·모델 버전 기록 | ICD C3.3 | `llm/client.py` | `test_happy_path_returns_output_and_metadata` | A5 | ✓ (version-bump-catching test itself still A6) |
-| AI_103 † | 리포트 재생성 | spec §11 | `cli.py` | `test_regenerate_from_payload` | A6 | — |
+| AI_102.5 † | 프롬프트·모델 버전 기록 | ICD C3.3 | `llm/client.py` | `test_happy_path_returns_output_and_metadata`, `test_system_prompt_matches_pinned_hash` | A5/A6 | ✓ |
+| AI_103 † | 리포트 재생성 | spec §11 | `cli.py` | `test_regenerate_produces_a_different_report_with_no_data_root`, `test_regenerate_carries_images_forward` | A6 | ✓ |
 | AI_104 † | 회차 간 비교 | — | — | — | A7 | deferred |
 
 † Added during design review; not in the original requirements list. See `02-ai-subsystem-spec.md` and the ADRs for rationale.

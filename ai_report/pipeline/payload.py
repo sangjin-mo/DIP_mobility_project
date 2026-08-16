@@ -16,11 +16,17 @@ regardless of estimate, since spec's ladder has nowhere further to go.
 Each degradation step below the zone's own selected count is recorded in
 `Payload.known_limitations`, not silently applied.
 
+`load_payload`/`payload_to_aggregate` are the read-side counterpart, added
+for A6: `cli.py regenerate {patrol_id}` has no rover or database access
+(spec §11), so it reconstructs everything `render_report` needs — a
+`PatrolAggregate` and the `obstructions` dict — from a previously-written
+`payload.json` alone, rather than re-running ①/②/③.
+
 Called by: whatever runs the pipeline for a patrol — currently only
 `tests/test_payload.py`; production orchestration (on `PATROL_END` + VIS
 `_COMPLETE`, immediately before the LLM call) is a later phase's addition.
-`build_payload` is pure (no I/O); `write_payload` is the only function
-here that touches the filesystem.
+`build_payload`/`payload_to_aggregate` are pure (no I/O); `write_payload`/
+`load_payload` are the only functions here that touch the filesystem.
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ import json
 from pathlib import Path
 
 from ai_report.config import Settings
-from ai_report.models import PatrolAggregate, Payload, ZoneMetadata
+from ai_report.models import LlmMetadata, PatrolAggregate, Payload, ZoneMetadata
 from ai_report.pipeline.segment import PatrolSegmentation
 
 # The degradation ladder itself (3 -> 2 -> 1 -> 0) isn't config — it's the
@@ -144,3 +150,37 @@ def write_payload(payload: Payload, dest_dir: Path) -> Path:
         json.dumps(payload.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return out_path
+
+
+def load_payload(path: Path) -> Payload:
+    """Read and parse a stored `payload.json` back into a `Payload`.
+
+    The read side of `write_payload`. Called by `cli.py`'s `regenerate`
+    command — the one place in this codebase that reconstructs pipeline
+    state from disk instead of running the pipeline forward.
+    """
+    return Payload.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def payload_to_aggregate(payload: Payload) -> PatrolAggregate:
+    """Reconstruct a `PatrolAggregate` from a stored `Payload`, for regeneration.
+
+    A straight field copy, not a re-derivation: `Payload`'s fields are
+    deliberately `PatrolAggregate`'s shape minus `llm` (see `Payload`'s own
+    docstring in `models.py`) plus `obstructions`/`known_limitations`,
+    which neither `PatrolAggregate` nor `metadata.json` carry. `llm` is set
+    to the same `LlmMetadata(enabled=False)` placeholder `aggregate()`
+    itself produces — the real value is merged in after `generate_report()`
+    runs again, exactly like the first time this patrol's report was built.
+
+    Called by `cli.py`'s `regenerate` command.
+    """
+    return PatrolAggregate(
+        patrol_id=payload.patrol_id,
+        patrol_date=payload.patrol_date,
+        duration_min=payload.duration_min,
+        overall_status=payload.overall_status,
+        llm=LlmMetadata(enabled=False),
+        data_completeness=payload.data_completeness,
+        zones=payload.zones,
+    )

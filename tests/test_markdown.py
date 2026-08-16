@@ -101,14 +101,14 @@ def section_order(markdown: str) -> list[str]:
 
 def test_six_sections_present_and_ordered():
     agg = make_aggregate([one_zone()])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert section_order(md) == _EXPECTED_SECTIONS
 
 
 def test_six_sections_present_with_zero_zones():
     """A3 acceptance: report generates successfully for a patrol with zero zones."""
     agg = make_aggregate([])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert section_order(md) == _EXPECTED_SECTIONS
     assert "구역 정보 없음" in md
     assert "환경 데이터 없음" in md
@@ -116,14 +116,14 @@ def test_six_sections_present_with_zero_zones():
 
 def test_six_sections_present_with_single_zone():
     agg = make_aggregate([one_zone(1)])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert section_order(md) == _EXPECTED_SECTIONS
     assert "### 1구역 — 1구역" in md
 
 
 def test_numbers_trace_to_aggregate_not_hardcoded():
     agg = make_aggregate([one_zone(1)], overall_status=ReportStatus.CAUTION)
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "**주의**" in md  # overall_status.value, not the raw ReportStatus.CAUTION repr
     assert "ReportStatus" not in md  # would appear if .value were forgotten anywhere
     assert "18분" in md  # duration_min
@@ -132,7 +132,7 @@ def test_numbers_trace_to_aggregate_not_hardcoded():
 
 def test_observation_counts_appear_as_table_rows():
     agg = make_aggregate([one_zone(1)])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "| tomato | 정상 | 8 |" in md
     assert "| tomato | 미성숙 | 2 |" in md
 
@@ -141,13 +141,13 @@ def test_zone_with_no_observations_says_so_not_empty_table():
     zone = one_zone(1)
     zone.observations = {}
     agg = make_aggregate([zone])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "관측 없음" in md
 
 
 def test_llm_disabled_uses_fallback_summary_and_states_limitation():
     agg = make_aggregate([one_zone()])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "LLM 분석이 포함되지 않은 자동 생성 리포트입니다." in md
     # stated as a limitation too, per spec's data-limitations example
     assert md.count("LLM 분석이 포함되지 않은") >= 2
@@ -159,33 +159,33 @@ def test_low_boundary_confidence_stated_in_data_limitations():
     agg = make_aggregate([one_zone()])
     agg.data_completeness.zone_boundary_confidence = "low"
     seg = PatrolSegmentation(patrol_id=PATROL_ID, boundary_confidence="low", windows=[], patrol_start_ts_ms=0, patrol_end_ts_ms=1000)
-    md = render_report(agg, seg)
+    md = render_report(agg, seg.obstruction_counts())
     assert "추정값" in md
 
 
 def test_low_coverage_triggers_warning_in_data_limitations():
     agg = make_aggregate([one_zone()])
     agg.data_completeness.rate = 0.5
-    md = render_report(agg, make_segmentation(), coverage_warn_threshold=0.90)
+    md = render_report(agg, make_segmentation().obstruction_counts(), coverage_warn_threshold=0.90)
     assert "90% 미만" in md
 
 
 def test_high_coverage_does_not_trigger_warning():
     agg = make_aggregate([one_zone()])
     agg.data_completeness.rate = 0.99
-    md = render_report(agg, make_segmentation(), coverage_warn_threshold=0.90)
+    md = render_report(agg, make_segmentation().obstruction_counts(), coverage_warn_threshold=0.90)
     assert "미만입니다" not in md
 
 
 def test_recapture_flag_produces_recommendation():
     agg = make_aggregate([one_zone(1, flags=["재촬영_필요"], undetermined_rate=0.42)])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "1구역: 재촬영 권장 (판단불가 비율 42%)" in md
 
 
 def test_no_flags_produces_default_recommendation_text():
     agg = make_aggregate([one_zone(1, flags=[])])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "현재 특별한 조치가 필요한 구역이 없습니다." in md
 
 
@@ -200,13 +200,13 @@ def test_obstruction_events_listed_per_zone():
     )
     agg = make_aggregate([one_zone(1)])
     seg = make_segmentation([zone_window])
-    md = render_report(agg, seg)
+    md = render_report(agg, seg.obstruction_counts())
     assert "1구역: EMERGENCY_STOP 2회, LINE_LOST 1회" in md
 
 
 def test_no_obstruction_events_states_none_recorded():
     agg = make_aggregate([one_zone()])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "통로 장애 이벤트가 기록되지 않았습니다." in md
 
 
@@ -216,27 +216,27 @@ def test_no_markdown_line_is_a_run_on_of_multiple_zones():
     concatenating every zone's env line onto one unreadable run of text.
     """
     agg = make_aggregate([one_zone(1), one_zone(2), one_zone(3)])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     env_lines = [line for line in md.splitlines() if re.match(r"^- \d+구역: ", line)]
     assert len(env_lines) == 3  # one line per zone, not one line total
 
 
 def test_zone_with_no_selected_images_shows_image_note():
     agg = make_aggregate([one_zone(1, image_ids=[])])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "이미지 없음" in md
 
 
 def test_zone_with_selected_images_omits_image_note():
     agg = make_aggregate([one_zone(1, image_ids=["z1_003", "z1_007"])])
-    md = render_report(agg, make_segmentation())
+    md = render_report(agg, make_segmentation().obstruction_counts())
     assert "이미지 없음" not in md
 
 
 def test_llm_summary_and_overall_note_appear_in_patrol_summary():
     agg = make_aggregate([one_zone(1)])
     llm = make_llm_output(summary_ko="요약 문장.", overall_note_ko="종합 문장.")
-    md = render_report(agg, make_segmentation(), llm=llm)
+    md = render_report(agg, make_segmentation().obstruction_counts(), llm=llm)
     assert "요약 문장." in md
     assert "종합 문장." in md
 
@@ -244,7 +244,7 @@ def test_llm_summary_and_overall_note_appear_in_patrol_summary():
 def test_llm_growth_note_and_visual_findings_appear_per_zone():
     agg = make_aggregate([one_zone(1)])
     llm = make_llm_output(zones=[make_zone_note(1, growth_note_ko="생육 특이사항.", visual_findings_ko=["잎 색상 양호"])])
-    md = render_report(agg, make_segmentation(), llm=llm)
+    md = render_report(agg, make_segmentation().obstruction_counts(), llm=llm)
     assert "생육 특이사항." in md
     assert "- 잎 색상 양호" in md
 
@@ -252,7 +252,7 @@ def test_llm_growth_note_and_visual_findings_appear_per_zone():
 def test_llm_env_note_appended_to_env_line_with_em_dash():
     agg = make_aggregate([one_zone(1)])
     llm = make_llm_output(zones=[make_zone_note(1, env_note_ko="온습도 안정적.")])
-    md = render_report(agg, make_segmentation(), llm=llm)
+    md = render_report(agg, make_segmentation().obstruction_counts(), llm=llm)
     env_line = next(line for line in md.splitlines() if line.startswith("- 1구역: "))
     assert env_line.endswith("— 온습도 안정적.")
 
@@ -264,7 +264,7 @@ def test_llm_path_obstructions_appended_alongside_deterministic_bullets():
     )
     agg = make_aggregate([one_zone(1)])
     llm = make_llm_output(path_obstructions_ko=["1구역에서 비상정지가 함께 관찰됨."])
-    md = render_report(agg, make_segmentation([zone_window]), llm=llm)
+    md = render_report(agg, make_segmentation([zone_window]).obstruction_counts(), llm=llm)
     assert "1구역: EMERGENCY_STOP 1회" in md  # deterministic bullet still present
     assert "1구역에서 비상정지가 함께 관찰됨." in md  # LLM prose appended
 
@@ -272,21 +272,21 @@ def test_llm_path_obstructions_appended_alongside_deterministic_bullets():
 def test_llm_recommended_actions_appended_with_zone_prefix():
     agg = make_aggregate([one_zone(1)])
     llm = make_llm_output(zones=[make_zone_note(1, recommended_actions_ko=["정기 관수 유지"])])
-    md = render_report(agg, make_segmentation(), llm=llm)
+    md = render_report(agg, make_segmentation().obstruction_counts(), llm=llm)
     assert "1구역: 정기 관수 유지" in md
 
 
 def test_llm_next_patrol_suggestion_appears_in_recommendations():
     agg = make_aggregate([one_zone(1)])
     llm = make_llm_output(next_patrol_suggestion_ko="다음 순찰은 오전에 권장됩니다.")
-    md = render_report(agg, make_segmentation(), llm=llm)
+    md = render_report(agg, make_segmentation().obstruction_counts(), llm=llm)
     assert "다음 순찰은 오전에 권장됩니다." in md
 
 
 def test_llm_data_limitations_appended_alongside_deterministic_bullets():
     agg = make_aggregate([one_zone(1)])
     llm = make_llm_output(data_limitations_ko=["일부 이미지 품질이 낮았습니다."])
-    md = render_report(agg, make_segmentation(), llm=llm)
+    md = render_report(agg, make_segmentation().obstruction_counts(), llm=llm)
     assert "UDP 패킷 수신" in md  # deterministic bullet still present
     assert "일부 이미지 품질이 낮았습니다." in md
 
@@ -298,7 +298,7 @@ def test_llm_note_for_unknown_zone_id_produces_no_content():
     """
     agg = make_aggregate([one_zone(1)])  # only zone 1 exists in the aggregate
     llm = make_llm_output(zones=[make_zone_note(99, growth_note_ko="존재하지 않는 구역 소견")])
-    md = render_report(agg, make_segmentation(), llm=llm)
+    md = render_report(agg, make_segmentation().obstruction_counts(), llm=llm)
     assert "존재하지 않는 구역 소견" not in md
 
 
@@ -308,8 +308,8 @@ def test_deterministic_sections_identical_with_and_without_llm():
     not llm is provided.
     """
     agg = make_aggregate([one_zone(1)], overall_status=ReportStatus.CAUTION)
-    without_llm = render_report(agg, make_segmentation())
-    with_llm = render_report(agg, make_segmentation(), llm=make_llm_output(zones=[make_zone_note(1)]))
+    without_llm = render_report(agg, make_segmentation().obstruction_counts())
+    with_llm = render_report(agg, make_segmentation().obstruction_counts(), llm=make_llm_output(zones=[make_zone_note(1)]))
     assert "**주의**" in without_llm
     assert "**주의**" in with_llm
     assert "| tomato | 정상 | 8 |" in without_llm

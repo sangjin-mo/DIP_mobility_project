@@ -1,10 +1,12 @@
 """Entry points. This is the only module allowed to use `print`.
 
 Called by: the `ai-report` console script (registered in `pyproject.toml`),
-or directly via `python -m ai_report.cli serve`. Calls `get_settings`
-(config.py), `Store` (ingest/store.py), `create_udp_listener`
-(ingest/udp_listener.py), and `create_app` (ingest/event_api.py) to wire up
-the whole A1 ingest path in one process.
+or directly via `python -m ai_report.cli serve` / `python -m ai_report.cli
+regenerate {patrol_id}`. `serve` wires up the whole A1 ingest path in one
+process (`get_settings`, `Store`, `create_udp_listener`, `create_app`).
+`regenerate` (A6) rebuilds one report from its own stored `payload.json` —
+see `_regenerate`'s docstring for why that's the one command in this
+codebase with no rover or database dependency at all.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -20,6 +23,13 @@ from ai_report.config import get_settings
 from ai_report.ingest.event_api import create_app
 from ai_report.ingest.store import Store
 from ai_report.ingest.udp_listener import create_udp_listener
+from ai_report.llm.client import generate_report
+from ai_report.models import Payload
+from ai_report.pipeline.payload import load_payload, payload_to_aggregate, write_payload
+from ai_report.render.markdown import render_report
+from ai_report.storage.layout import write_report
+
+logger = logging.getLogger(__name__)
 
 
 async def _serve(host: str) -> None:
@@ -52,13 +62,101 @@ async def _serve(host: str) -> None:
         store.close()
 
 
+def _write_images(images: dict[str, bytes], tmp_dir: Path) -> None:
+    """Write already-resized image bytes into `tmp_dir/images/{image_id}.jpg`.
+
+    Passed to `storage/layout.py::write_report` via `extra_writers` — same
+    reasoning as `pipeline/select_images.py::copy_and_resize_images`
+    (`[!FLAG]` in `storage/layout.py`): writing into the *old* report's
+    `images/` directory and calling `write_report` afterward does nothing
+    for the *new* one, since the atomic swap builds a fresh temp directory
+    that only contains what was explicitly written into it.
+    `_load_report_images` reads the bytes this writes; the two are always
+    called as a pair from `_regenerate`, never independently.
+    """
+    images_dir = tmp_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    for image_id, data in images.items():
+        (images_dir / f"{image_id}.jpg").write_bytes(data)
+
+
+def _load_report_images(report_dir: Path, payload: Payload) -> dict[str, bytes]:
+    """Read already-resized images out of a report's own `images/` directory.
+
+    Regeneration has no rover or database access (spec §11) — these
+    images were already resized once, when the report was first built
+    (`pipeline/select_images.py::copy_and_resize_images`), so there is no
+    need to reach the raw source files again even if they were still
+    reachable. A missing image file is logged and skipped, same as the
+    original build's handling of a missing source (`[!FLAG]`-adjacent
+    "never fabricate data on missing input").
+
+    Called only by `_regenerate`.
+    """
+    images_dir = report_dir / "images"
+    images: dict[str, bytes] = {}
+    for zone in payload.zones:
+        for image_id in zone.image_ids:
+            path = images_dir / f"{image_id}.jpg"
+            if path.is_file():
+                images[image_id] = path.read_bytes()
+            else:
+                logger.warning("regenerate: image_id=%s missing at %s; continuing without it", image_id, path)
+    return images
+
+
+async def _regenerate(patrol_id: str, report_root: Path) -> Path:
+    """Rebuild `{report_root}/{patrol_id}/` from its own stored `payload.json`.
+
+    Spec §11: "`cli.py regenerate {patrol_id}` re-runs ⑤⑥⑦ from the stored
+    payload with no rover involvement." This is the one command in the
+    codebase that reconstructs pipeline state from disk instead of running
+    ①–④ forward — everything it needs (zone stats, obstruction counts,
+    already-selected and already-resized image bytes) was captured in the
+    original run's `payload.json` and `images/` directory, so no `Store`,
+    no `Settings.DATA_ROOT`, no segmentation, no rover traffic is touched
+    at all. `pipeline/payload.py::payload_to_aggregate` reconstructs the
+    `PatrolAggregate` `render_report` needs; `_load_report_images` supplies
+    the LLM call's vision content.
+
+    Re-runs the real LLM call (⑤) — this is the whole point (spec §11:
+    "Essential for prompt tuning — expect dozens of iterations"), not a
+    replay of the previous response. `write_report`'s regeneration path
+    (A3) already handles overwriting the existing report directory
+    atomically, so a failed regenerate leaves the previous report intact.
+
+    Returns the final report directory. Called by `main` when the
+    `regenerate` subcommand is used.
+    """
+    settings = get_settings()
+    report_dir = report_root / patrol_id
+
+    payload = load_payload(report_dir / "payload.json")
+    agg = payload_to_aggregate(payload)
+    images = _load_report_images(report_dir, payload)
+    valid_zone_ids = {z.zone_id for z in agg.zones}
+
+    llm_output, llm_metadata = await generate_report(payload, images, valid_zone_ids, settings)
+    agg = agg.model_copy(update={"llm": llm_metadata})
+
+    md = render_report(agg, payload.obstructions, llm=llm_output, coverage_warn_threshold=settings.COVERAGE_WARN_THRESHOLD)
+
+    return write_report(
+        patrol_id, md, agg, report_root,
+        extra_writers=[
+            lambda tmp: write_payload(payload, tmp),
+            lambda tmp: _write_images(images, tmp),
+        ],
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Parses arguments and dispatches to the matching subcommand.
 
-    Currently the only subcommand is `serve`, which runs `_serve(...)` to
-    completion via `asyncio.run`. Structured as a subcommand parser (rather
-    than a single flat set of flags) so future phases can add
-    `regenerate {patrol_id}` (A6) without reshaping this function.
+    `serve` runs `_serve(...)` to completion via `asyncio.run`. `regenerate
+    {patrol_id}` runs `_regenerate(...)` the same way. Structured as a
+    subcommand parser so each stays independent — `regenerate` shares no
+    state with `serve` beyond `config.get_settings()`.
 
     Called by the `ai-report` console script and by `if __name__ == "__main__"` below.
     """
@@ -70,10 +168,18 @@ def main(argv: list[str] | None = None) -> int:
     serve_p = sub.add_parser("serve", help="run the UDP listener and event API")
     serve_p.add_argument("--host", default="0.0.0.0")
 
+    regen_p = sub.add_parser("regenerate", help="rebuild a report from its stored payload.json")
+    regen_p.add_argument("patrol_id")
+    regen_p.add_argument("--report-root", default=None, help="defaults to config.REPORT_ROOT")
+
     args = parser.parse_args(argv)
 
     if args.command == "serve":
         asyncio.run(_serve(args.host))
+    elif args.command == "regenerate":
+        report_root = Path(args.report_root) if args.report_root else get_settings().REPORT_ROOT
+        final_dir = asyncio.run(_regenerate(args.patrol_id, report_root))
+        print(f"regenerated report for patrol_id={args.patrol_id} at {final_dir}")
     return 0
 
 

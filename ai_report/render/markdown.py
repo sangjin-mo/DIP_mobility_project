@@ -47,7 +47,6 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from ai_report.llm.schema import LlmReportOutput
 from ai_report.models import PatrolAggregate, ZoneMetadata
-from ai_report.pipeline.segment import PatrolSegmentation
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -207,17 +206,25 @@ def _jinja_env() -> Environment:
 
 def render_report(
     agg: PatrolAggregate,
-    segmentation: PatrolSegmentation,
+    obstructions: dict[int, dict[str, int]],
     llm: LlmReportOutput | None = None,
     coverage_warn_threshold: float = 0.90,
 ) -> str:
     """Render `report.md.j2` to a Markdown string. Pure — no I/O, no network.
 
     `agg` supplies every number and status, pre-formatted per zone by
-    `_build_zone_views` before the template ever runs. `segmentation`
-    supplies the per-zone obstruction-event detail `agg` doesn't carry (see
-    `PatrolSegmentation.obstruction_counts`). `llm` is the (possibly
-    already zone-filtered) structured output from
+    `_build_zone_views` before the template ever runs. `obstructions` is
+    the per-zone `EMERGENCY_STOP`/`LINE_LOST` count `agg` doesn't carry —
+    normally `PatrolSegmentation.obstruction_counts()` from the pipeline's
+    own segmentation, or `Payload.obstructions` when rendering from a
+    stored payload with no segmentation available at all (A6's
+    `cli.py regenerate`, which has no rover or database access — see that
+    command). This function takes the plain dict rather than a
+    `PatrolSegmentation` object for exactly that reason: regeneration is
+    the reason this dependency was narrowed from "the whole segmentation"
+    to "the one derived value this function actually uses."
+
+    `llm` is the (possibly already zone-filtered) structured output from
     `llm/client.py::generate_report`, or `None` on any A5 fallback — the
     template's `{% if llm %}` branches handle that case explicitly, and
     every deterministic section (observation counts, recapture
@@ -228,7 +235,6 @@ def render_report(
     value but is passed as a plain float rather than a `Settings` object,
     keeping this function's dependency surface to exactly what it renders.
     """
-    obstructions = segmentation.obstruction_counts()
     zone_views = _build_zone_views(agg, obstructions, llm)
 
     template = _jinja_env().get_template("report.md.j2")
