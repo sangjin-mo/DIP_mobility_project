@@ -48,7 +48,12 @@ def make_segmentation(windows: list[ZoneWindow] | None = None) -> PatrolSegmenta
     )
 
 
-def one_zone(zone_id: int = 1, flags: list[str] | None = None, undetermined_rate: float | None = 0.1) -> ZoneMetadata:
+def one_zone(
+    zone_id: int = 1,
+    flags: list[str] | None = None,
+    undetermined_rate: float | None = 0.1,
+    image_ids: list[str] | None = None,
+) -> ZoneMetadata:
     return ZoneMetadata(
         zone_id=zone_id,
         zone_name=f"{zone_id}구역",
@@ -57,7 +62,7 @@ def one_zone(zone_id: int = 1, flags: list[str] | None = None, undetermined_rate
         observations={"tomato": {"정상": 8, "미성숙": 2}},
         undetermined_rate=undetermined_rate,
         flags=flags or [],
-        image_ids=[],
+        image_ids=image_ids or [],
         confidence="high",
     )
 
@@ -188,3 +193,15 @@ def test_no_markdown_line_is_a_run_on_of_multiple_zones():
     md = render_report(agg, make_segmentation())
     env_lines = [line for line in md.splitlines() if re.match(r"^- \d+구역: ", line)]
     assert len(env_lines) == 3  # one line per zone, not one line total
+
+
+def test_zone_with_no_selected_images_shows_image_note():
+    agg = make_aggregate([one_zone(1, image_ids=[])])
+    md = render_report(agg, make_segmentation())
+    assert "이미지 없음" in md
+
+
+def test_zone_with_selected_images_omits_image_note():
+    agg = make_aggregate([one_zone(1, image_ids=["z1_003", "z1_007"])])
+    md = render_report(agg, make_segmentation())
+    assert "이미지 없음" not in md

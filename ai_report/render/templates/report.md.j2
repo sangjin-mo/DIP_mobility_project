@@ -28,6 +28,9 @@
 {% else %}
 {{ "관측 없음" }}
 {% endif %}
+{% if zv.image_note %}
+{{ zv.image_note }}
+{% endif %}
 {% if llm and zv.zone_id in llm.zone_notes %}
 {{ llm.zone_notes[zv.zone_id] }}
 {% endif %}

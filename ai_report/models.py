@@ -15,13 +15,21 @@ as a single cross-field constraint. `contracts/validate.py` plus a manual
 schema round-trip (see `01-interface-contracts.md`'s `[!FLAG]`) are what
 catch drift between this file and the schemas instead.
 
-`PatrolAggregate` (bottom of this file) mirrors `c3-metadata.schema.json`
-and is what `pipeline/aggregate.py::aggregate()` (A2) returns and
-`storage/layout.py` (A3) writes as `metadata.json`. It intentionally
-excludes fields the schema doesn't expose to WEB (per-zone dwell time,
-image count, raw drive-event list) — those are computed as local values
-inside `aggregate()` to derive `status`/`flags`, not persisted on the model.
-`zones[].image_ids` is always `[]` until A4's image selection exists.
+`PatrolAggregate` mirrors `c3-metadata.schema.json` and is what
+`pipeline/aggregate.py::aggregate()` (A2) returns and `storage/layout.py`
+(A3) writes as `metadata.json`. It intentionally excludes fields the
+schema doesn't expose to WEB (per-zone dwell time, image count, raw
+drive-event list) — those are computed as local values inside
+`aggregate()` to derive `status`/`flags`, not persisted on the model.
+`zones[].image_ids` starts `[]` from `aggregate()` and is filled in by
+`pipeline/select_images.py::apply_image_selection` (A4), which returns a
+*new* `PatrolAggregate` (via `model_copy`) rather than mutating the one
+`aggregate()` produced.
+
+`Payload` (bottom of this file) is `PatrolAggregate`'s shape minus the
+`llm` block, plus what the LLM/regeneration need that `metadata.json`
+doesn't carry (per-zone obstruction event counts, degradation notes from
+token-budget enforcement) — see `pipeline/payload.py`.
 
 Called by (who constructs/parses these models):
 - `ingest/udp_listener.py::TelemetryUDPProtocol._handle` — parses raw UDP
@@ -39,6 +47,9 @@ Called by (who constructs/parses these models):
   `AnalysisResult`/`Detection` directly.
 - `pipeline/aggregate.py::aggregate` — constructs `PatrolAggregate` and its
   nested `ZoneMetadata`/`StatSummary`/`DataCompleteness`/`LlmMetadata`.
+- `pipeline/select_images.py::apply_image_selection` — constructs an
+  updated `PatrolAggregate` with `zones[].image_ids` populated.
+- `pipeline/payload.py::build_payload` — constructs `Payload`.
 """
 
 from __future__ import annotations
@@ -386,5 +397,52 @@ class PatrolAggregate(BaseModel):
     llm: LlmMetadata
     data_completeness: DataCompleteness
     zones: list[ZoneMetadata] = Field(default_factory=list)
+
+    _validate_patrol_id = field_validator("patrol_id")(_validate_patrol_id)
+
+
+# --- Payload (AI internal — the LLM's actual input, ④) --------------------
+
+
+class Payload(BaseModel):
+    """The exact LLM input, and everything needed to regenerate a report with
+    no rover or database access (ICD §C3.1: "payload.json — exact LLM
+    input, for audit and regeneration").
+
+    Same shape as `PatrolAggregate` minus `llm` (meaningless as *input* —
+    it's metadata *about* a call that hasn't happened yet) and
+    `generated_at` (payload.json has its own build time, tracked
+    separately from whenever a report gets rendered from it), plus two
+    things `metadata.json` doesn't carry because WEB doesn't need them but
+    the LLM does:
+
+    - `obstructions`: per-zone `EMERGENCY_STOP`/`LINE_LOST` counts. Spec
+      §9.2's system prompt explicitly asks the model to describe
+      "비상정지 및 라인 이탈 이벤트의 발생 구역과 빈도" — it cannot do that
+      from `zones[]` alone, since `ZoneMetadata` deliberately excludes raw
+      event detail (see `pipeline/aggregate.py`).
+    - `known_limitations`: deterministic facts the pipeline itself
+      discovered (e.g. "token budget forced fewer images than selected")
+      that the model should incorporate into its own `data_limitations_ko`
+      output (spec §9's prompt: "data_completeness.rate 가 0.90 미만이면
+      데이터 한계를 반드시 명시하라" is the same pattern — a deterministic
+      fact, stated as an instruction, that the model turns into prose).
+      This is not the LLM's own output field of the same conceptual
+      purpose; it's the deterministic input that feeds it.
+
+    Constructed by `pipeline/payload.py::build_payload`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    patrol_id: PatrolId
+    patrol_date: str
+    duration_min: int = Field(ge=0)
+    overall_status: ReportStatus
+    data_completeness: DataCompleteness
+    zones: list[ZoneMetadata] = Field(default_factory=list)
+    obstructions: dict[int, dict[str, int]] = Field(default_factory=dict)
+    known_limitations: list[str] = Field(default_factory=list)
+    prompt_version: str
 
     _validate_patrol_id = field_validator("patrol_id")(_validate_patrol_id)

@@ -48,9 +48,19 @@ class Settings(BaseSettings):
     IMAGES_PER_ZONE_MAX: int = 3
     IMAGE_QUALITY_MIN: float = 0.40
     IMAGE_RESIZE_PX: int = 768
+    IMAGE_JPEG_QUALITY: int = 85
     UNDETERMINED_FLAG_THRESHOLD: float = 0.30
     COVERAGE_WARN_THRESHOLD: float = 0.90
     TREND_MIN_PATROLS: int = 10
+
+    # Token budget estimate (spec §8's table) — a rough per-component
+    # heuristic, not real tokenization (no tokenizer dependency exists in
+    # this package; A5's OpenAI SDK may report real counts after the call,
+    # but pipeline/payload.py must estimate *before* calling).
+    TOKEN_ESTIMATE_PER_ZONE: int = 200
+    TOKEN_ESTIMATE_FIXED: int = 300
+    TOKEN_ESTIMATE_SYSTEM_PROMPT: int = 700
+    TOKEN_ESTIMATE_PER_IMAGE: int = 765
 
     # Segmentation fallback (pipeline/segment.py, spec §5's fallback path) —
     # not specified anywhere in the docs; see the [!FLAG] in

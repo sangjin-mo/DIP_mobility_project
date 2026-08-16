@@ -19,13 +19,18 @@ import argparse
 import json
 import logging
 import random
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
+
+from PIL import Image
 
 from ai_report.config import get_settings
 from ai_report.models import AnalysisResult, CropState, Detection
 
 logger = logging.getLogger(__name__)
+
+_PLACEHOLDER_IMAGE_SIZE = (640, 480)
 
 _STATE_WEIGHTS = {
     CropState.NORMAL: 6,
@@ -117,6 +122,19 @@ def generate_analysis_results(
     return results
 
 
+def _color_from_image_id(image_id: str) -> tuple[int, int, int]:
+    """A deterministic flat RGB colour derived from `image_id`.
+
+    Only exists so placeholder images are visibly distinct from one
+    another (useful when eyeballing a smoke test's `images/` output) — the
+    exact colour carries no meaning. Uses `zlib.crc32`, not the builtin
+    `hash()`, since `hash()` on strings is salted per-process
+    (`PYTHONHASHSEED`) and would make this non-reproducible across runs.
+    """
+    digest = zlib.crc32(image_id.encode("utf-8"))
+    return (digest >> 16) & 0xFF, (digest >> 8) & 0xFF, digest & 0xFF
+
+
 def write_analysis_files(
     results: list[AnalysisResult],
     data_root: Path,
@@ -128,12 +146,16 @@ def write_analysis_files(
 
     One file per `AnalysisResult`, JSON-dumped with `by_alias=True` so the
     `class_` field round-trips as the contract's `"class"` key. When
-    `write_placeholder_images` is set, also touches an empty file at each
-    result's `image_path` under `data_root` (real image bytes aren't needed
-    for A1's ingest path, but the referenced path existing keeps the
-    directory layout realistic). When `write_complete` is set, finally
-    touches `_COMPLETE` in the analysis directory — this is the signal
-    `VisWatcher.scan_once`/`.watch` polls for.
+    `write_placeholder_images` is set, also generates a real (if content-free)
+    JPEG at each result's `image_path` under `data_root` — a flat colour,
+    `_PLACEHOLDER_IMAGE_SIZE` pixels, one shade per image_id so distinct
+    images are at least distinguishable by eye. This has to be a real,
+    decodable JPEG rather than an empty file: A4's
+    `pipeline/select_images.py::copy_and_resize_images` opens selected
+    images with Pillow to resize them, and an empty file isn't decodable.
+    When `write_complete` is set, finally touches `_COMPLETE` in the
+    analysis directory — this is the signal `VisWatcher.scan_once`/`.watch`
+    polls for.
 
     Called by `main` (CLI use) and directly by `tests/test_fake_vis.py`,
     which also exercises `write_complete=False` to test the not-yet-complete path.
@@ -151,7 +173,8 @@ def write_analysis_files(
             image_path = Path(data_root) / result.image_path
             image_path.parent.mkdir(parents=True, exist_ok=True)
             if not image_path.exists():
-                image_path.write_bytes(b"")
+                color = _color_from_image_id(result.image_id)
+                Image.new("RGB", _PLACEHOLDER_IMAGE_SIZE, color).save(image_path, "JPEG")
 
     if write_complete:
         (analysis_dir / "_COMPLETE").touch()

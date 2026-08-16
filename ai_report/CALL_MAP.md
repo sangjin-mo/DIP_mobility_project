@@ -1,18 +1,20 @@
 # Call map
 
 Which function calls which, and who runs each module. Covers A1
-(`ingest/` + `devtools/`), A2 (`pipeline/`), and A3 (`render/` +
-`storage/`); it will grow further as `llm/` (A5) lands. See
+(`ingest/` + `devtools/`), A2 (`pipeline/segment.py`, `pipeline/aggregate.py`),
+A3 (`render/` + `storage/`), and A4 (`pipeline/select_images.py`,
+`pipeline/payload.py`); it will grow further as `llm/` (A5) lands. See
 `../02-ai-subsystem-spec.md` §2 for the intended full module layout and
 `../01-interface-contracts.md` for the contracts these modules implement.
 
 **There is still no production orchestration.** Nothing in this codebase
-yet calls `segment_patrol` → `aggregate` → `render_report` → `write_report`
-automatically when a patrol finishes (`PATROL_END` + VIS `_COMPLETE`) — that
-glue is a later addition (likely `cli.py`, once the trigger condition needs
-watching for). Today that whole chain is only exercised by tests and by
-manual scripts, such as the one used to smoke-test A2/A3 end to end against
-a real running server. See "What's not wired up yet" at the bottom.
+yet calls `segment_patrol` → `aggregate` → `apply_image_selection` →
+`build_payload` → `render_report` → `write_report` automatically when a
+patrol finishes (`PATROL_END` + VIS `_COMPLETE`) — that glue is a later
+addition (likely `cli.py`, once the trigger condition needs watching for).
+Today that whole chain is only exercised by tests and by manual scripts,
+such as the one used to smoke-test A2–A4 end to end against a real running
+server. See "What's not wired up yet" at the bottom.
 
 ## Two runtime processes, one shared package
 
@@ -66,7 +68,7 @@ flowchart TB
     STOREW3 --> DB
 ```
 
-## The A2/A3 pipeline (no automatic trigger yet)
+## The A2–A4 pipeline (no automatic trigger yet)
 
 Given a `patrol_id`, this is the chain that turns ingested rows into a
 report on disk. Every arrow below is a real function call once something
@@ -77,23 +79,38 @@ flowchart LR
     LOAD["caller loads rows via\nStore.telemetry_for_patrol() /\nevents_for_patrol() /\nanalysis_for_patrol()"]
     LOAD --> SEG["pipeline.segment.segment_patrol()"]
     SEG -->|"PatrolSegmentation"| AGG["pipeline.aggregate.aggregate()"]
-    AGG -->|"PatrolAggregate"| REN["render.markdown.render_report()"]
-    SEG -.->|"segmentation also passed in\n(for per-zone obstruction events)"| REN
+    AGG -->|"PatrolAggregate\n(image_ids all [])"| SEL["pipeline.select_images.apply_image_selection()"]
+    SEG -.->|"segmentation also passed in"| SEL
+    SEL -->|"PatrolAggregate\n(image_ids populated)"| PAY["pipeline.payload.build_payload()"]
+    SEG -.->|"segmentation also passed in\n(for obstructions)"| PAY
+    SEL -->|"PatrolAggregate"| REN["render.markdown.render_report()"]
+    SEG -.->|"segmentation also passed in\n(for obstruction_counts)"| REN
     REN -->|"Markdown string"| ST["storage.layout.write_report()"]
-    AGG -->|"PatrolAggregate also passed in\n(for metadata.json)"| ST
-    ST --> FS[("reports/{patrol_id}/\nreport.md + metadata.json")]
+    SEL -->|"PatrolAggregate\n(for metadata.json)"| ST
+    SEL -.->|"extra_writers=[...]"| COPY["select_images.copy_and_resize_images()"]
+    PAY -.->|"extra_writers=[...]"| WPAY["payload.write_payload()"]
+    COPY -.-> ST
+    WPAY -.-> ST
+    ST --> FS[("reports/{patrol_id}/\nreport.md + metadata.json\n+ payload.json + images/")]
 
     classDef det stroke:#10B981,stroke-width:2px
-    class SEG,AGG,REN,ST det
+    class SEG,AGG,SEL,PAY,REN,ST det
 ```
 
 Green stages match spec §1's architecture diagram — deterministic,
-network-free. `render_report` needing *both* `PatrolAggregate` and
-`PatrolSegmentation` is the one non-obvious wiring detail: `ZoneMetadata`
-(what `aggregate()` returns per zone) deliberately excludes raw
-`EMERGENCY_STOP`/`LINE_LOST` event detail because that's not part of
-`c3-metadata.schema.json` — so the 통로 장애 요인 section reads that detail
-back out of the segmentation object directly instead.
+network-free. Two non-obvious wiring details:
+
+- `render_report` needing *both* `PatrolAggregate` and `PatrolSegmentation`:
+  `ZoneMetadata` (what `aggregate()` returns per zone) deliberately
+  excludes raw `EMERGENCY_STOP`/`LINE_LOST` event detail because that's not
+  part of `c3-metadata.schema.json` — so the 통로 장애 요인 section (and
+  `Payload.obstructions`) read that detail back out of the segmentation
+  object directly, via `PatrolSegmentation.obstruction_counts()`.
+- `copy_and_resize_images`/`write_payload` must be passed to
+  `write_report` via `extra_writers`, **not** called against the final
+  report path directly — a real bug (images silently discarded by the
+  atomic swap) was found this way during A4's end-to-end smoke test; see
+  the `[!FLAG]` in `storage/layout.py`.
 
 ## Per-module function reference
 
@@ -202,7 +219,8 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_boundaries_from_distance` | — | `segment_patrol`, fallback path; also called directly by `tests/test_segment.py` to unit-test the distance-integration mechanic in isolation |
 | `_build_windows` | `_fill_window` | `segment_patrol` |
 | `_fill_window` | — | `_build_windows` |
-| `PatrolSegmentation.zones` | — | `pipeline/aggregate.py::aggregate`; `render/markdown.py::_obstructions_by_zone` |
+| `PatrolSegmentation.zones` | — | `pipeline/aggregate.py::aggregate`; `PatrolSegmentation.obstruction_counts`; `pipeline/select_images.py::apply_image_selection`/`copy_and_resize_images` |
+| `PatrolSegmentation.obstruction_counts` | `.zones` | `render/markdown.py::render_report`; `pipeline/payload.py::build_payload` |
 
 ### `pipeline/aggregate.py`
 
@@ -218,31 +236,49 @@ Not "called" so much as constructed/parsed. See the module docstring in
 
 | Function | Calls | Called by |
 |---|---|---|
-| `_obstructions_by_zone` | `PatrolSegmentation.zones` | `render_report` |
 | `_env_line` | — | `_build_zone_views` |
 | `_observation_lines` | — | `_build_zone_views` |
 | `_obstruction_line` | — | `_build_zone_views` |
 | `_recommendation_line` | — | `_build_zone_views` |
-| `_build_zone_views` | `_env_line`, `_observation_lines`, `_obstruction_line`, `_recommendation_line` | `render_report` |
+| `_image_note` | — | `_build_zone_views` |
+| `_build_zone_views` | `_env_line`, `_observation_lines`, `_obstruction_line`, `_recommendation_line`, `_image_note` | `render_report` |
 | `_jinja_env` | `jinja2.Environment(...)` | `render_report` |
-| `render_report` | `_obstructions_by_zone`, `_build_zone_views`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; `storage/layout.py`'s production caller once orchestration exists |
+| `render_report` | `PatrolSegmentation.obstruction_counts`, `_build_zone_views`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; production caller once orchestration exists |
+
+### `pipeline/select_images.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `_count_state` / `_has_state` | — | `select_images_for_zone` |
+| `select_images_for_zone` | `_count_state`, `_has_state`, `statistics.median` | `apply_image_selection`; directly by `tests/test_select_images.py` |
+| `apply_image_selection` | `select_images_for_zone`, `PatrolSegmentation.zones` | whatever runs the pipeline for a patrol; `tests/test_select_images.py` |
+| `copy_and_resize_images` | `PatrolSegmentation.zones`, `PIL.Image.open`/`.thumbnail`/`.save` | passed to `storage/layout.py::write_report` via `extra_writers`; directly by `tests/test_select_images.py` |
+
+### `pipeline/payload.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `estimate_tokens` | — | `build_payload`, once per candidate image budget |
+| `_truncate_images` | — | `build_payload` |
+| `build_payload` | `PatrolSegmentation.obstruction_counts`, `estimate_tokens`, `_truncate_images`; constructs `Payload` | whatever runs the pipeline for a patrol; `tests/test_payload.py` |
+| `write_payload` | — | passed to `storage/layout.py::write_report` via `extra_writers`; directly by `tests/test_payload.py` |
 
 ### `storage/layout.py`
 
 | Function | Calls | Called by |
 |---|---|---|
 | `_write_files` | writes `report.md`, `metadata.json` into a tmp dir | `write_report` (and monkeypatched directly by `tests/test_layout.py` to simulate a write failure mid-way) |
-| `write_report` | `_write_files`, `os.replace` (the atomic directory swap) | `tests/test_layout.py`; production orchestration once it exists |
+| `write_report` | `_write_files`, each function in `extra_writers` (e.g. `select_images.copy_and_resize_images`, `payload.write_payload`), `os.replace` (the atomic directory swap) | `tests/test_layout.py`; production orchestration once it exists |
 
 ## What's not wired up yet
 
-Nothing yet calls the A2/A3 chain (`segment_patrol` → `aggregate` →
-`render_report` → `write_report`) automatically on `PATROL_END` + VIS
-`_COMPLETE` — see this doc's intro. `VisWatcher.watch` is the other
-still-unwired piece: it exists for A1's polling-until-complete behaviour,
-but nothing calls it outside tests either. All four are reachable today
-only from tests and from ad hoc scripts, such as the manual smoke test
-(real `ai-report serve` process, real `fake_rover`/`fake_vis` traffic, then
-a short script calling `Store.telemetry_for_patrol` →
-`segment_patrol` → `aggregate` → `render_report` → `write_report` by hand)
-used to verify A2/A3 end to end.
+Nothing yet calls the A2–A4 chain (`segment_patrol` → `aggregate` →
+`apply_image_selection` → `build_payload` → `render_report` →
+`write_report`) automatically on `PATROL_END` + VIS `_COMPLETE` — see this
+doc's intro. `VisWatcher.watch` is the other still-unwired piece: it
+exists for A1's polling-until-complete behaviour, but nothing calls it
+outside tests either. All of this is reachable today only from tests and
+from ad hoc scripts, such as the manual smoke test (real `ai-report serve`
+process, real `fake_rover`/`fake_vis` traffic, then a short script running
+the full A1–A4 chain by hand, including `write_report`'s `extra_writers`)
+used to verify A2–A4 end to end.

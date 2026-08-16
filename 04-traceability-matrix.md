@@ -16,8 +16,8 @@ Update the Status column as phases complete. This table is what a reviewer check
 |---|---|---|---|---|---|---|
 | AI_101.1 | UDP 텔레메트리 수신 | ICD C1.1 | `ingest/udp_listener.py` | `test_udp_ingest`, `test_dedup`, `test_out_of_order` | A1 | ✓ |
 | AI_101.2 | 구역별 온습도 평균 산출 | spec §6 | `pipeline/aggregate.py` | `test_env_stats_exclude_null_samples` | A2 | ✓ |
-| AI_101.3 | 순찰 데이터 집계 및 JSON 패키징 | spec §8 | `pipeline/payload.py` | `test_payload_build`, `test_token_budget` | A4 | — |
-| AI_101.4 † | 이미지 선정 기준 정의 | spec §7 | `pipeline/select_images.py` | `test_image_selection_priority`, `test_quality_floor` | A4 | — |
+| AI_101.3 | 순찰 데이터 집계 및 JSON 패키징 | spec §8 | `pipeline/payload.py` | `test_estimate_tokens_matches_spec_formula`, `test_over_budget_degrades_to_two_images_per_zone` | A4 | ✓ |
+| AI_101.4 † | 이미지 선정 기준 정의 | spec §7 | `pipeline/select_images.py` | `test_anomaly_exemplar_picked_first_highest_quality_among_disease_images`, `test_quality_floor_excludes_low_quality_images_entirely` | A4 | ✓ |
 | AI_101.5 † | 구역 경계 판정 | ADR-0003, ICD C1.2 | `pipeline/segment.py` | `test_emergency_stop_does_not_shift_boundary`, `test_fallback_segmentation_when_no_zone_enter_events` | A2 | ✓ |
 | AI_101.6 † | 데이터 완전성 측정 | ICD C1.3 | `ingest/store.py` | `test_loss_rate_with_gap`, `test_loss_rate_none_when_empty` | A1 | ✓ |
 | AI_102.1 | AI 리포트 생성 요청 | spec §9 | `llm/client.py` | `test_llm_call_mocked` | A5 | — |

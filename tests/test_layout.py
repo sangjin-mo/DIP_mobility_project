@@ -99,3 +99,40 @@ def test_write_report_succeeds_for_a_patrol_with_no_zones(tmp_path: Path):
     """
     final = write_report(PATROL_ID, "# report\n", make_aggregate(), tmp_path)
     assert final.exists()
+
+
+def test_extra_writers_are_included_in_the_same_atomic_swap(tmp_path: Path):
+    """Regression test for the bug an end-to-end smoke test found: a file
+    written by an A4-style extra step (images/, payload.json) must survive
+    write_report's atomic swap, not be silently discarded by it. Each
+    extra_writer receives the *temp* directory, not the final path — writing
+    to the final path directly and calling write_report after loses the file.
+    """
+
+    def add_payload(tmp_dir: Path) -> None:
+        (tmp_dir / "payload.json").write_text('{"ok": true}', encoding="utf-8")
+
+    def add_images_dir(tmp_dir: Path) -> None:
+        images_dir = tmp_dir / "images"
+        images_dir.mkdir()
+        (images_dir / "z1_000.jpg").write_bytes(b"not-a-real-jpeg-but-thats-fine-here")
+
+    final = write_report(
+        PATROL_ID, "# report\n", make_aggregate(), tmp_path,
+        extra_writers=[add_payload, add_images_dir],
+    )
+
+    assert (final / "payload.json").read_text(encoding="utf-8") == '{"ok": true}'
+    assert (final / "images" / "z1_000.jpg").exists()
+    assert (final / "report.md").exists()  # base files still present alongside extras
+
+
+def test_a_failed_extra_writer_leaves_no_trace_and_no_partial_directory(tmp_path: Path):
+    def boom(tmp_dir: Path) -> None:
+        raise OSError("simulated extra_writer failure")
+
+    with pytest.raises(OSError, match="simulated extra_writer failure"):
+        write_report(PATROL_ID, "# report\n", make_aggregate(), tmp_path, extra_writers=[boom])
+
+    assert not (tmp_path / PATROL_ID).exists()
+    assert list(tmp_path.iterdir()) == []

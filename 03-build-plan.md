@@ -123,6 +123,29 @@ The emergency-stop test is the important one. Write it first.
 - Token estimate computed before any call; over-budget triggers documented degradation
 - `payload.json` is complete enough to regenerate a report with no database access
 
+> [!FLAG] **Done 2026-08-17.** All acceptance criteria met and tested
+> (`tests/test_select_images.py`, `tests/test_payload.py`). Two real
+> issues found and fixed during development, both worth knowing about:
+> 1. The "normal representative" step's median must be computed over the
+>    *remaining* candidate pool, not every eligible image in the zone —
+>    including the already-claimed anomaly exemplar (whose 정상 count is
+>    usually 0) skews "typical" toward zero. Spec §7 doesn't specify which
+>    population the median is over; see `select_images_for_zone`'s inline comment.
+> 2. A genuine data-loss bug, caught by the end-to-end smoke test rather
+>    than a unit test: writing selected images to the final report path
+>    and *then* calling `storage/layout.py::write_report` silently
+>    discards them, because `write_report`'s atomic swap builds a fresh
+>    temp directory containing only `report.md`/`metadata.json` and
+>    renames it over the final path. Fixed by adding `write_report(...,
+>    extra_writers=[...])` — see the `[!FLAG]` in `storage/layout.py`.
+>    `pipeline/select_images.py::copy_and_resize_images` and
+>    `pipeline/payload.py::write_payload` must be passed through this
+>    parameter, never called against the final path directly.
+>
+> Also: `fake_vis.py` now generates real (if content-free) JPEG placeholder
+> images instead of empty files, since `copy_and_resize_images` needs
+> something Pillow can actually decode.
+
 ---
 
 ## A5 — LLM integration

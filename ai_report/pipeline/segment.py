@@ -87,6 +87,29 @@ class PatrolSegmentation:
         """
         return sorted((w for w in self.windows if w.zone_id != 0), key=lambda w: w.zone_id)
 
+    def obstruction_counts(self) -> dict[int, dict[str, int]]:
+        """Count `EMERGENCY_STOP`/`LINE_LOST` events per zone.
+
+        Shared by two A4+ consumers that both need this and neither of
+        which get it from `PatrolAggregate` — `ZoneMetadata` deliberately
+        excludes raw event detail since it's not part of
+        `c3-metadata.schema.json` (see `pipeline/aggregate.py`'s
+        docstring): `render/markdown.py`'s 통로 장애 요인 section, and
+        `pipeline/payload.py::build_payload`'s `Payload.obstructions` (the
+        LLM needs this to write about drive events at all — spec §9.2's
+        prompt explicitly asks for it). A zone with no obstruction events
+        is omitted from the result entirely, not present with an empty dict.
+        """
+        result: dict[int, dict[str, int]] = {}
+        for window in self.zones():
+            counts: dict[str, int] = {}
+            for evt in window.events:
+                if evt.type in (EventType.EMERGENCY_STOP, EventType.LINE_LOST):
+                    counts[evt.type.value] = counts.get(evt.type.value, 0) + 1
+            if counts:
+                result[window.zone_id] = counts
+        return result
+
 
 def segment_patrol(
     patrol_id: str,

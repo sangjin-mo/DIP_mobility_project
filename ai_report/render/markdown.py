@@ -36,12 +36,10 @@ from typing import Protocol
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from ai_report.models import EventType, PatrolAggregate, ZoneMetadata
+from ai_report.models import PatrolAggregate, ZoneMetadata
 from ai_report.pipeline.segment import PatrolSegmentation
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
-
-_OBSTRUCTION_EVENT_TYPES = (EventType.EMERGENCY_STOP, EventType.LINE_LOST)
 
 
 class LlmReportContent(Protocol):
@@ -74,27 +72,7 @@ class ZoneView:
     env_line: str
     obstruction_line: str | None
     recommendation_line: str | None
-
-
-def _obstructions_by_zone(segmentation: PatrolSegmentation) -> dict[int, dict[str, int]]:
-    """Count `EMERGENCY_STOP`/`LINE_LOST` events per zone, for the 통로 장애 요인 section.
-
-    Not derived from `PatrolAggregate` because `ZoneMetadata` deliberately
-    excludes raw event detail (it's not part of `c3-metadata.schema.json` —
-    see `pipeline/aggregate.py`'s docstring). Reads directly from
-    `segmentation.zones()` instead, which still has each zone's full event
-    list. A zone with no obstruction events is omitted from the result
-    entirely.
-    """
-    result: dict[int, dict[str, int]] = {}
-    for window in segmentation.zones():
-        counts: dict[str, int] = {}
-        for evt in window.events:
-            if evt.type in _OBSTRUCTION_EVENT_TYPES:
-                counts[evt.type.value] = counts.get(evt.type.value, 0) + 1
-        if counts:
-            result[window.zone_id] = counts
-    return result
+    image_note: str | None
 
 
 def _env_line(zone: ZoneMetadata) -> str:
@@ -136,6 +114,16 @@ def _recommendation_line(zone: ZoneMetadata) -> str | None:
     return f"{zone.zone_id}구역: 재촬영 권장 (판단불가 비율 {rate_pct}%)"
 
 
+def _image_note(zone: ZoneMetadata) -> str | None:
+    """"이미지 없음" when `pipeline/select_images.py` selected nothing for this
+    zone — spec §7: "If a zone has no eligible images, it contributes
+    text-only and the report notes 이미지 없음." True whether the zone had
+    no captured images at all, every image fell below the quality floor, or
+    (before A4 populates `image_ids`) selection simply hasn't run yet.
+    """
+    return None if zone.image_ids else "이미지 없음"
+
+
 def _build_zone_views(agg: PatrolAggregate, obstructions: dict[int, dict[str, int]]) -> list[ZoneView]:
     """Turn `agg.zones` into fully pre-formatted `ZoneView`s. See module docstring for why."""
     views = []
@@ -152,6 +140,7 @@ def _build_zone_views(agg: PatrolAggregate, obstructions: dict[int, dict[str, in
                 if zone.zone_id in obstructions
                 else None,
                 recommendation_line=_recommendation_line(zone),
+                image_note=_image_note(zone),
             )
         )
     return views
@@ -188,14 +177,14 @@ def render_report(
     `agg` supplies every number and status, pre-formatted per zone by
     `_build_zone_views` before the template ever runs. `segmentation`
     supplies the per-zone obstruction-event detail `agg` doesn't carry (see
-    `_obstructions_by_zone`). `llm` is `None` for every report until A5
-    exists (or on any A5 fallback) — the template's `{% if llm %}` branches
-    handle that case explicitly. `coverage_warn_threshold` defaults to
-    `config.COVERAGE_WARN_THRESHOLD`'s value but is passed as a plain float
-    rather than a `Settings` object, keeping this function's dependency
-    surface to exactly what it renders.
+    `PatrolSegmentation.obstruction_counts`). `llm` is `None` for every
+    report until A5 exists (or on any A5 fallback) — the template's
+    `{% if llm %}` branches handle that case explicitly.
+    `coverage_warn_threshold` defaults to `config.COVERAGE_WARN_THRESHOLD`'s
+    value but is passed as a plain float rather than a `Settings` object,
+    keeping this function's dependency surface to exactly what it renders.
     """
-    obstructions = _obstructions_by_zone(segmentation)
+    obstructions = segmentation.obstruction_counts()
     zone_views = _build_zone_views(agg, obstructions)
 
     template = _jinja_env().get_template("report.md.j2")
