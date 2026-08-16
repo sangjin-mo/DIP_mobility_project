@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+from ai_report.config import get_settings
+from ai_report.models import (
+    DriveReading,
+    DriveState,
+    EnvReading,
+    EventMessage,
+    EventType,
+    TelemetryPacket,
+)
+from ai_report.pipeline.segment import _boundaries_from_distance, segment_patrol
+
+PATROL_ID = "20260813_1430"
+
+
+def telemetry(seq: int, ts_ms: int, state: DriveState = DriveState.RUNNING, speed: float = 0.3) -> TelemetryPacket:
+    return TelemetryPacket(
+        patrol_id=PATROL_ID,
+        seq=seq,
+        ts_ms=ts_ms,
+        type="TELEMETRY",
+        zone_id=None,
+        env=EnvReading(temp_c=25.0, humid_pct=60.0),
+        drive=DriveReading(speed_mps=speed, steer=0.0, ultra_cm=100, state=state),
+    )
+
+
+def event(event_seq: int, ts_ms: int, event_type: EventType, zone_id: int | None = None, detail: dict | None = None) -> EventMessage:
+    return EventMessage(
+        patrol_id=PATROL_ID, event_seq=event_seq, ts_ms=ts_ms, type=event_type, zone_id=zone_id, detail=detail or {}
+    )
+
+
+def test_emergency_stop_does_not_shift_boundary():
+    """The A2 acceptance test the build plan says to write first."""
+    events = [
+        event(0, 0, EventType.PATROL_START),
+        event(1, 1000, EventType.ZONE_ENTER, zone_id=1),
+        event(2, 3000, EventType.EMERGENCY_STOP, detail={"ultra_cm": 8}),  # mid zone 1
+        event(3, 5000, EventType.ZONE_ENTER, zone_id=2),
+        event(4, 9000, EventType.PATROL_END, detail={"reason": "completed"}),
+    ]
+    rows = [telemetry(i, i * 1000) for i in range(10)]  # ts_ms 0..9000
+
+    seg = segment_patrol(PATROL_ID, rows, events, [], get_settings())
+
+    assert seg.boundary_confidence == "high"
+    zone1 = next(w for w in seg.windows if w.zone_id == 1)
+    zone2 = next(w for w in seg.windows if w.zone_id == 2)
+    assert (zone1.start_ts_ms, zone1.end_ts_ms) == (1000, 5000)
+    assert (zone2.start_ts_ms, zone2.end_ts_ms) == (5000, 9000)
+    # the EMERGENCY_STOP landed inside zone 1, but did not move zone 2's start
+    assert any(e.type == EventType.EMERGENCY_STOP for e in zone1.events)
+
+
+def test_transit_segment_before_first_zone_enter():
+    events = [
+        event(0, 0, EventType.PATROL_START),
+        event(1, 2000, EventType.ZONE_ENTER, zone_id=1),
+        event(2, 4000, EventType.PATROL_END, detail={"reason": "completed"}),
+    ]
+    rows = [telemetry(0, 0), telemetry(1, 1000), telemetry(2, 2500), telemetry(3, 3500)]
+
+    seg = segment_patrol(PATROL_ID, rows, events, [], get_settings())
+
+    transit = next(w for w in seg.windows if w.zone_id == 0)
+    assert (transit.start_ts_ms, transit.end_ts_ms) == (0, 2000)
+    assert {t.seq for t in transit.telemetry} == {0, 1}
+    assert 0 not in {w.zone_id for w in seg.zones()}  # zones() excludes transit
+
+
+def test_no_transit_segment_when_first_zone_enter_is_at_patrol_start():
+    events = [
+        event(0, 0, EventType.PATROL_START),
+        event(1, 0, EventType.ZONE_ENTER, zone_id=1),
+        event(2, 2000, EventType.PATROL_END),
+    ]
+    rows = [telemetry(0, 0), telemetry(1, 1000)]
+
+    seg = segment_patrol(PATROL_ID, rows, events, [], get_settings())
+
+    assert 0 not in {w.zone_id for w in seg.windows}
+
+
+def test_last_zone_end_is_inclusive_of_patrol_end():
+    events = [
+        event(0, 0, EventType.PATROL_START),
+        event(1, 0, EventType.ZONE_ENTER, zone_id=1),
+        event(2, 5000, EventType.PATROL_END),
+    ]
+    rows = [telemetry(0, 0), telemetry(1, 5000)]  # last sample exactly at PATROL_END
+
+    seg = segment_patrol(PATROL_ID, rows, events, [], get_settings())
+
+    zone1 = next(w for w in seg.windows if w.zone_id == 1)
+    assert {t.seq for t in zone1.telemetry} == {0, 1}  # seq 1 at ts=5000 not dropped
+
+
+def test_fallback_segmentation_when_no_zone_enter_events():
+    events = [event(0, 0, EventType.PATROL_START), event(1, 1200, EventType.PATROL_END)]
+    rows = [telemetry(i, i * 100, speed=1.0) for i in range(13)]  # ts_ms 0..1200, 1 m/s
+
+    seg = segment_patrol(PATROL_ID, rows, events, [], get_settings())
+
+    assert seg.boundary_confidence == "low"
+    assert len(seg.zones()) == get_settings().ROUTE_ZONE_COUNT
+    # every telemetry row still lands in exactly one window
+    assert sum(len(w.telemetry) for w in seg.windows) == len(rows)
+
+
+def test_fallback_excludes_stopped_and_emergency_intervals_from_distance():
+    """Direct unit test of the distance-integration mechanic (spec §5's fallback
+    path): a STOPPED interval must contribute zero distance, not `speed_mps * dt`.
+
+    Two zones, 15m each (ROUTE_TOTAL_DISTANCE_M=30). Timeline: 10s RUNNING at
+    1 m/s (+10m), 10s STOPPED at 1 m/s (+0m if excluded, +10m if not), 10s
+    RUNNING at 1 m/s (+10m). Correctly excluding the STOPPED interval means
+    cumulative distance only reaches 20m (crossing the 15m zone boundary) at
+    the very last sample, t=30000 — an implementation that wrongly counted
+    the STOPPED interval would instead read 20m already at t=20000, moving
+    the boundary 10 seconds earlier. This is exactly the kind of bug hard
+    rule 4 exists to catch, just in the fallback path instead of the primary one.
+    """
+    settings = get_settings().model_copy(update={"ROUTE_ZONE_COUNT": 2, "ROUTE_TOTAL_DISTANCE_M": 30.0})
+    rows = [
+        telemetry(0, 0, state=DriveState.RUNNING, speed=1.0),
+        telemetry(1, 10_000, state=DriveState.STOPPED, speed=1.0),
+        telemetry(2, 20_000, state=DriveState.RUNNING, speed=1.0),
+        telemetry(3, 30_000, state=DriveState.RUNNING, speed=1.0),
+    ]
+
+    boundaries = _boundaries_from_distance(rows, patrol_end_ts_ms=30_000, settings=settings)
+
+    zone1 = next(b for b in boundaries if b[0] == 1)
+    zone2 = next(b for b in boundaries if b[0] == 2)
+    assert zone1 == (1, 0, 30_000)  # would be (1, 0, 20_000) if STOPPED time weren't excluded
+    assert zone2 == (2, 30_000, 30_000)
+
+
+def test_missing_patrol_start_and_end_fall_back_to_row_timestamps():
+    events = [event(0, 100, EventType.ZONE_ENTER, zone_id=1)]  # no PATROL_START/PATROL_END
+    rows = [telemetry(0, 100), telemetry(1, 900)]
+
+    seg = segment_patrol(PATROL_ID, rows, events, [], get_settings())
+
+    assert seg.patrol_start_ts_ms == 100  # earliest telemetry row
+    assert seg.patrol_end_ts_ms == 900  # latest telemetry row
+    zone1 = next(w for w in seg.windows if w.zone_id == 1)
+    assert zone1.end_ts_ms == 900
+
+
+def test_out_of_order_input_is_sorted_before_segmenting():
+    events = [
+        event(2, 4000, EventType.PATROL_END),
+        event(0, 0, EventType.PATROL_START),
+        event(1, 1000, EventType.ZONE_ENTER, zone_id=1),
+    ]
+    rows = [telemetry(2, 3000), telemetry(0, 500), telemetry(1, 1500)]
+
+    seg = segment_patrol(PATROL_ID, rows, events, [], get_settings())
+
+    zone1 = next(w for w in seg.windows if w.zone_id == 1)
+    assert {t.seq for t in zone1.telemetry} == {1, 2}
+
+
+def test_empty_input_produces_no_windows():
+    seg = segment_patrol(PATROL_ID, [], [], [], get_settings())
+    assert seg.windows == []
+    assert seg.zones() == []

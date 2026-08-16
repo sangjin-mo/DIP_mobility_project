@@ -1,10 +1,18 @@
-# A1 call map
+# Call map
 
-Which function calls which, and who runs each module. This documents the
-code as built in Phase A1 (`ingest/` + `devtools/`); it will grow as A2+
-(`pipeline/`, `llm/`, `render/`, `storage/`) lands. See `../02-ai-subsystem-spec.md`
-§2 for the intended full module layout and `../CALL_MAP.md`'s sibling docs
-for the contracts these modules implement.
+Which function calls which, and who runs each module. Covers A1
+(`ingest/` + `devtools/`), A2 (`pipeline/`), and A3 (`render/` +
+`storage/`); it will grow further as `llm/` (A5) lands. See
+`../02-ai-subsystem-spec.md` §2 for the intended full module layout and
+`../01-interface-contracts.md` for the contracts these modules implement.
+
+**There is still no production orchestration.** Nothing in this codebase
+yet calls `segment_patrol` → `aggregate` → `render_report` → `write_report`
+automatically when a patrol finishes (`PATROL_END` + VIS `_COMPLETE`) — that
+glue is a later addition (likely `cli.py`, once the trigger condition needs
+watching for). Today that whole chain is only exercised by tests and by
+manual scripts, such as the one used to smoke-test A2/A3 end to end against
+a real running server. See "What's not wired up yet" at the bottom.
 
 ## Two runtime processes, one shared package
 
@@ -58,6 +66,35 @@ flowchart TB
     STOREW3 --> DB
 ```
 
+## The A2/A3 pipeline (no automatic trigger yet)
+
+Given a `patrol_id`, this is the chain that turns ingested rows into a
+report on disk. Every arrow below is a real function call once something
+invokes `segment_patrol`; nothing currently does that automatically.
+
+```mermaid
+flowchart LR
+    LOAD["caller loads rows via\nStore.telemetry_for_patrol() /\nevents_for_patrol() /\nanalysis_for_patrol()"]
+    LOAD --> SEG["pipeline.segment.segment_patrol()"]
+    SEG -->|"PatrolSegmentation"| AGG["pipeline.aggregate.aggregate()"]
+    AGG -->|"PatrolAggregate"| REN["render.markdown.render_report()"]
+    SEG -.->|"segmentation also passed in\n(for per-zone obstruction events)"| REN
+    REN -->|"Markdown string"| ST["storage.layout.write_report()"]
+    AGG -->|"PatrolAggregate also passed in\n(for metadata.json)"| ST
+    ST --> FS[("reports/{patrol_id}/\nreport.md + metadata.json")]
+
+    classDef det stroke:#10B981,stroke-width:2px
+    class SEG,AGG,REN,ST det
+```
+
+Green stages match spec §1's architecture diagram — deterministic,
+network-free. `render_report` needing *both* `PatrolAggregate` and
+`PatrolSegmentation` is the one non-obvious wiring detail: `ZoneMetadata`
+(what `aggregate()` returns per zone) deliberately excludes raw
+`EMERGENCY_STOP`/`LINE_LOST` event detail because that's not part of
+`c3-metadata.schema.json` — so the 통로 장애 요인 section reads that detail
+back out of the segmentation object directly instead.
+
 ## Per-module function reference
 
 Each row: what the function does in one line, what it calls, and what
@@ -95,9 +132,11 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `Store.insert_analysis` | — | `vis_watcher.py::VisWatcher.scan_once` |
 | `Store.received_telemetry_seqs` | — | `Store.loss_rate`; tests |
 | `Store.max_telemetry_seq` | — | `Store.loss_rate` |
-| `Store.loss_rate` | `max_telemetry_seq`, `received_telemetry_seqs` | `tests/test_a1_acceptance.py` (the phase-done check); future `pipeline/aggregate.py` (A2) |
-| `Store.events_for_patrol` | — | tests; future `pipeline/segment.py` (A2) |
+| `Store.loss_rate` | `max_telemetry_seq`, `received_telemetry_seqs` | `tests/test_a1_acceptance.py` (the phase-done check) |
+| `Store.events_for_patrol` | — | tests; whatever loads a patrol for `pipeline/segment.py::segment_patrol` |
 | `Store.analysis_count` | — | tests |
+| `Store.telemetry_for_patrol` | — | tests; whatever loads a patrol for `pipeline/segment.py::segment_patrol` |
+| `Store.analysis_for_patrol` | — | tests; whatever loads a patrol for `pipeline/segment.py::segment_patrol` |
 
 ### `ingest/udp_listener.py`
 
@@ -153,11 +192,57 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `build_arg_parser` | — | `main` |
 | `main` | `build_arg_parser`, `get_settings`, `generate_analysis_results`, `write_analysis_files` | `python -m ai_report.devtools.fake_vis` |
 
+### `pipeline/segment.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `segment_patrol` | `_first_ts`, `_last_ts`, `_boundaries_from_events` or `_boundaries_from_distance`, `_build_windows` | `tests/test_segment.py`; whatever loads a patrol (A2 orchestration, not yet written) |
+| `_first_ts` / `_last_ts` | — | `segment_patrol` |
+| `_boundaries_from_events` | — | `segment_patrol`, when any `ZONE_ENTER` events exist |
+| `_boundaries_from_distance` | — | `segment_patrol`, fallback path; also called directly by `tests/test_segment.py` to unit-test the distance-integration mechanic in isolation |
+| `_build_windows` | `_fill_window` | `segment_patrol` |
+| `_fill_window` | — | `_build_windows` |
+| `PatrolSegmentation.zones` | — | `pipeline/aggregate.py::aggregate`; `render/markdown.py::_obstructions_by_zone` |
+
+### `pipeline/aggregate.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `aggregate` | `_aggregate_zone`, `_worst_status`, `_patrol_date`; constructs `PatrolAggregate`/`DataCompleteness`/`LlmMetadata` | `tests/test_aggregate.py`; whatever runs the pipeline for a patrol (A2 orchestration, not yet written) |
+| `_patrol_date` | — | `aggregate` |
+| `_worst_status` | — | `aggregate` |
+| `_stat` | — | `_aggregate_zone` |
+| `_aggregate_zone` | `_stat`; constructs `ZoneMetadata`/`ZoneEnv` | `aggregate`, once per non-transit `ZoneWindow` |
+
+### `render/markdown.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `_obstructions_by_zone` | `PatrolSegmentation.zones` | `render_report` |
+| `_env_line` | — | `_build_zone_views` |
+| `_observation_lines` | — | `_build_zone_views` |
+| `_obstruction_line` | — | `_build_zone_views` |
+| `_recommendation_line` | — | `_build_zone_views` |
+| `_build_zone_views` | `_env_line`, `_observation_lines`, `_obstruction_line`, `_recommendation_line` | `render_report` |
+| `_jinja_env` | `jinja2.Environment(...)` | `render_report` |
+| `render_report` | `_obstructions_by_zone`, `_build_zone_views`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; `storage/layout.py`'s production caller once orchestration exists |
+
+### `storage/layout.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `_write_files` | writes `report.md`, `metadata.json` into a tmp dir | `write_report` (and monkeypatched directly by `tests/test_layout.py` to simulate a write failure mid-way) |
+| `write_report` | `_write_files`, `os.replace` (the atomic directory swap) | `tests/test_layout.py`; production orchestration once it exists |
+
 ## What's not wired up yet
 
-`VisWatcher.watch` and `Store.loss_rate` / `Store.events_for_patrol` have no
-production caller yet — they exist because A1's acceptance criteria and
-future A2 modules (`pipeline/segment.py`, `pipeline/aggregate.py`) need
-them, but the orchestration that calls them automatically on `PATROL_END`
-doesn't exist until A2. Today they're reachable only from tests and from
-ad hoc scripts (as in the manual smoke test used to verify this phase).
+Nothing yet calls the A2/A3 chain (`segment_patrol` → `aggregate` →
+`render_report` → `write_report`) automatically on `PATROL_END` + VIS
+`_COMPLETE` — see this doc's intro. `VisWatcher.watch` is the other
+still-unwired piece: it exists for A1's polling-until-complete behaviour,
+but nothing calls it outside tests either. All four are reachable today
+only from tests and from ad hoc scripts, such as the manual smoke test
+(real `ai-report serve` process, real `fake_rover`/`fake_vis` traffic, then
+a short script calling `Store.telemetry_for_patrol` →
+`segment_patrol` → `aggregate` → `render_report` → `write_report` by hand)
+used to verify A2/A3 end to end.

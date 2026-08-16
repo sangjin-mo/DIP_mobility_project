@@ -46,6 +46,11 @@ Specific things to secure:
 - Malformed packets are logged and dropped without crashing the listener
 - Loss rate is computed and matches the emitter's configured drop rate within 1%
 
+> [!FLAG] **Done 2026-08-13.** All acceptance criteria met and tested
+> (`tests/test_a1_acceptance.py` plus the `ingest`/`devtools` unit tests);
+> verified again against a real `ai-report serve` process, not just
+> pytest. See `ai_report/CALL_MAP.md` for the module wiring.
+
 ---
 
 ## A2 — Segmentation and aggregation
@@ -63,6 +68,18 @@ Specific things to secure:
 
 The emergency-stop test is the important one. Write it first.
 
+> [!FLAG] **Done 2026-08-13.** All acceptance criteria met and tested
+> (`tests/test_segment.py`, `tests/test_aggregate.py`). `metadata.json` is
+> not written to disk by A2 itself — `PatrolAggregate` (the data structure)
+> is produced here; `storage/layout.py` (A3) does the actual write, since
+> `zones[].image_ids` can't be populated until A4's image selection exists.
+> Also surfaced two doc bugs in `contracts/fixtures/patrol_20260813_1430/README.md`
+> while building this (self-contradictory expected status, and a
+> "drives the flag" claim that contradicted the fixture's own numbers) —
+> both fixed. The fallback segmentation path needed config
+> (`ROUTE_ZONE_COUNT`, `ROUTE_TOTAL_DISTANCE_M`) the spec never defined —
+> see the `[!FLAG]` in `02-ai-subsystem-spec.md` §5.
+
 ---
 
 ## A3 — Markdown rendering, no LLM
@@ -77,6 +94,21 @@ The emergency-stop test is the important one. Write it first.
 - Report generates successfully for a patrol with zero images and for one with a single zone
 
 **At the end of A3 the subsystem is already useful.** Hand it to WEB and start their integration.
+
+> [!FLAG] **Done 2026-08-13.** All acceptance criteria met and tested
+> (`tests/test_markdown.py`, `tests/test_layout.py` — the latter includes
+> a monkeypatched mid-write failure to actually prove no partial directory
+> is ever observable, not just assert it). A real whitespace bug was found
+> and fixed during development: Jinja's `trim_blocks` silently ate the
+> newline after any content line ending in `{% endif %}`, concatenating
+> zone lines together — fixed by pre-formatting all per-zone strings in
+> Python before the template ever runs (see `render/markdown.py`'s module
+> docstring). `render_report` takes both `PatrolAggregate` and
+> `PatrolSegmentation` as input, not `PatrolAggregate` alone — the 통로 장애
+> 요인 section needs per-zone event detail that `metadata.json`'s schema
+> deliberately doesn't carry. WEB can now be handed a real `report.md` +
+> `metadata.json` pair, produced end to end from a live server in a manual
+> smoke test — see `ai_report/CALL_MAP.md`.
 
 ---
 

@@ -159,6 +159,27 @@ Records before the first `ZONE_ENTER` belong to a transit segment, `zone_id = 0`
 
 The fallback must be loud. `metadata.json` carries `zone_boundary_confidence: "low"` and the report's 데이터 한계 section states it explicitly.
 
+> [!FLAG] **Needs human review — "configured route zone distances" was never defined**
+>
+> Step 2 above says "divide by configured route zone distances" but no
+> document ever says where that configuration comes from — not `config.py`'s
+> §3 list, not the ICD, not the traceability matrix. `pipeline/segment.py`'s
+> implementation makes a concrete choice: `config.ROUTE_ZONE_COUNT` (default
+> 6) equal-length zones spanning `config.ROUTE_TOTAL_DISTANCE_M` (default
+> 120.0), i.e. one flat total-distance number divided evenly, not a
+> per-zone distance table. Real greenhouse zones are very unlikely to be
+> equal length, so **this fallback's zone boundaries will be wrong in
+> proportion, even though `boundary_confidence: "low"` correctly warns that
+> they're estimated at all.** Two things worth deciding with real route
+> data in hand:
+> 1. Replace `ROUTE_TOTAL_DISTANCE_M` with a real per-zone distance list
+>    once the physical route is measured, rather than equal division.
+> 2. `config.ZONE_NAMES: dict[int, str]` has the same problem one level
+>    up — `metadata.json`'s `zones[].zone_name` (ICD §C3.3, e.g. "B동 2열")
+>    has no defined source anywhere either. `pipeline/aggregate.py` falls
+>    back to a literal `"{zone_id}구역"` when a zone isn't in this map, so
+>    output is always valid, just unnamed until someone populates it.
+
 **Never segment on wall-clock elapsed time.** Emergency stops make that mapping wrong in a way nothing downstream can detect.
 
 ## 6. ② Aggregation

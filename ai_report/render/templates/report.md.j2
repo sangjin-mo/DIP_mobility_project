@@ -1,0 +1,77 @@
+# 순찰 리포트 — {{ agg.patrol_date }}
+
+## 순찰 요약
+{% if llm %}
+{{ llm.summary_ko }}
+{% else %}
+{{ "LLM 분석이 포함되지 않은 자동 생성 리포트입니다." }}
+{% endif %}
+
+- 순찰 시간: {{ agg.duration_min }}분
+- 구역 수: {{ agg.zones | length }}
+- 전체 상태: **{{ agg.overall_status.value }}**
+- 데이터 수신률: {{ "%.1f" | format(agg.data_completeness.rate * 100) }}%
+
+## 구역별 생육 현황
+{% if zone_views %}
+{% for zv in zone_views %}
+### {{ zv.zone_id }}구역 — {{ zv.zone_name }}
+
+상태: **{{ zv.status_label }}**{{ zv.flags_label }}
+
+{% if zv.observation_lines %}
+| 작물 | 상태 | 관측 수 |
+|---|---|---|
+{% for line in zv.observation_lines %}
+{{ line }}
+{% endfor %}
+{% else %}
+{{ "관측 없음" }}
+{% endif %}
+{% if llm and zv.zone_id in llm.zone_notes %}
+{{ llm.zone_notes[zv.zone_id] }}
+{% endif %}
+
+{% endfor %}
+{% else %}
+{{ "구역 정보 없음" }}
+{% endif %}
+
+## 환경 조건
+{% if zone_views %}
+{% for zv in zone_views %}
+- {{ zv.env_line }}
+{% endfor %}
+{% else %}
+{{ "환경 데이터 없음" }}
+{% endif %}
+
+## 통로 장애 요인
+{% if obstruction_lines %}
+{% for line in obstruction_lines %}
+- {{ line }}
+{% endfor %}
+{% else %}
+{{ "통로 장애 이벤트가 기록되지 않았습니다." }}
+{% endif %}
+
+## 권장 조치
+{% if recommendation_lines %}
+{% for line in recommendation_lines %}
+- {{ line }}
+{% endfor %}
+{% else %}
+{{ "현재 특별한 조치가 필요한 구역이 없습니다." }}
+{% endif %}
+
+## 데이터 한계
+- UDP 패킷 수신 {{ agg.data_completeness.udp_received }} / {{ agg.data_completeness.udp_expected }} ({{ "%.1f" | format(agg.data_completeness.rate * 100) }}%)
+{% if agg.data_completeness.rate < coverage_warn_threshold %}
+- 데이터 수신률이 {{ "%.0f" | format(coverage_warn_threshold * 100) }}% 미만입니다. 이 리포트의 통계는 일부 누락된 데이터를 기반으로 합니다.
+{% endif %}
+{% if agg.data_completeness.zone_boundary_confidence == "low" %}
+- {{ "구역 경계가 이벤트가 아닌 추정값(주행 거리 기반)으로 산출되었습니다." }}
+{% endif %}
+{% if not agg.llm.enabled %}
+- {{ "LLM 분석이 포함되지 않은 자동 생성 리포트입니다. 서술 내용 없이 수치와 규칙 기반 판정만 포함합니다." }}
+{% endif %}

@@ -14,15 +14,15 @@ Update the Status column as phases complete. This table is what a reviewer check
 
 | Req ID | Requirement | Design | Module | Test | Phase | Status |
 |---|---|---|---|---|---|---|
-| AI_101.1 | UDP 텔레메트리 수신 | ICD C1.1 | `ingest/udp_listener.py` | `test_udp_ingest`, `test_dedup`, `test_out_of_order` | A1 | — |
-| AI_101.2 | 구역별 온습도 평균 산출 | spec §6 | `pipeline/aggregate.py` | `test_zone_env_averages`, `test_null_env_path` | A2 | — |
+| AI_101.1 | UDP 텔레메트리 수신 | ICD C1.1 | `ingest/udp_listener.py` | `test_udp_ingest`, `test_dedup`, `test_out_of_order` | A1 | ✓ |
+| AI_101.2 | 구역별 온습도 평균 산출 | spec §6 | `pipeline/aggregate.py` | `test_env_stats_exclude_null_samples` | A2 | ✓ |
 | AI_101.3 | 순찰 데이터 집계 및 JSON 패키징 | spec §8 | `pipeline/payload.py` | `test_payload_build`, `test_token_budget` | A4 | — |
 | AI_101.4 † | 이미지 선정 기준 정의 | spec §7 | `pipeline/select_images.py` | `test_image_selection_priority`, `test_quality_floor` | A4 | — |
-| AI_101.5 † | 구역 경계 판정 | ADR-0003, ICD C1.2 | `pipeline/segment.py` | `test_estop_does_not_shift_boundary`, `test_fallback_segmentation` | A2 | — |
-| AI_101.6 † | 데이터 완전성 측정 | ICD C1.3 | `ingest/store.py` | `test_loss_rate` | A1 | — |
+| AI_101.5 † | 구역 경계 판정 | ADR-0003, ICD C1.2 | `pipeline/segment.py` | `test_emergency_stop_does_not_shift_boundary`, `test_fallback_segmentation_when_no_zone_enter_events` | A2 | ✓ |
+| AI_101.6 † | 데이터 완전성 측정 | ICD C1.3 | `ingest/store.py` | `test_loss_rate_with_gap`, `test_loss_rate_none_when_empty` | A1 | ✓ |
 | AI_102.1 | AI 리포트 생성 요청 | spec §9 | `llm/client.py` | `test_llm_call_mocked` | A5 | — |
 | AI_102.2 | 분석 시스템 프롬프트 정의 | spec §9.2 | `llm/prompts.py` | `test_prompt_prohibitions` | A5 | — |
-| AI_102.3 | 리포트 및 메타데이터 저장 | ICD C3.1 | `storage/layout.py` | `test_atomic_write` | A3 | — |
+| AI_102.3 | 리포트 및 메타데이터 저장 | ICD C3.1 | `storage/layout.py` | `test_no_partial_directory_is_ever_observable_at_the_final_path`, `test_a_failed_write_does_not_touch_an_existing_report` | A3 | ✓ |
 | AI_102.4 † | 리포트 생성 실패 처리 | spec §12 | `llm/client.py` | `test_retry_then_fallback` | A6 | — |
 | AI_102.5 † | 프롬프트·모델 버전 기록 | ICD C3.3 | `llm/client.py` | `test_prompt_version_recorded` | A6 | — |
 | AI_103 † | 리포트 재생성 | spec §11 | `cli.py` | `test_regenerate_from_payload` | A6 | — |
@@ -36,15 +36,15 @@ Update the Status column as phases complete. This table is what a reviewer check
 
 These emerged from ADRs. They are real requirements and need tests, but no customer requirement generated them.
 
-| Derived ID | Requirement | Source | Test | Phase |
-|---|---|---|---|---|
-| D_001 | The LLM must not compute or restate numbers | ADR-0004 | `test_numbers_come_from_aggregate` | A5 |
-| D_002 | Aggregation must be deterministic | ADR-0004 | `test_aggregate_deterministic` | A2 |
-| D_003 | A complete report must be producible with the LLM disabled | ADR-0004 | `test_report_without_llm` | A3 |
-| D_004 | Report Markdown must always contain six H2 sections in order | ADR-0005, ICD C3.2 | `test_section_structure_invariant` | A3 |
-| D_005 | Unknown VIS state enum values must raise, never coerce | ICD C2.3 | `test_unknown_state_raises` | A2 |
-| D_006 | Output must use 관측 수, never 개체 수 | ADR-0006 | `test_no_plant_count_language` | A5 |
-| D_007 | Fixtures must validate against contract schemas | ADR-0008 | `contracts/validate.py` in CI | A0 |
+| Derived ID | Requirement | Source | Test | Phase | Status |
+|---|---|---|---|---|---|
+| D_001 | The LLM must not compute or restate numbers | ADR-0004 | `test_numbers_come_from_aggregate` | A5 | — |
+| D_002 | Aggregation must be deterministic | ADR-0004 | `test_aggregate_is_deterministic` | A2 | ✓ |
+| D_003 | A complete report must be producible with the LLM disabled | ADR-0004 | `test_llm_disabled_uses_fallback_summary_and_states_limitation` | A3 | ✓ |
+| D_004 | Report Markdown must always contain six H2 sections in order | ADR-0005, ICD C3.2 | `test_six_sections_present_and_ordered`, `test_six_sections_present_with_zero_zones` | A3 | ✓ |
+| D_005 | Unknown VIS state enum values must raise, never coerce | ICD C2.3 | `test_unknown_state_raises` (ingest), `test_unknown_vis_state_raises_rather_than_coerces` (aggregate) | A2 | ✓ |
+| D_006 | Output must use 관측 수, never 개체 수 | ADR-0006 | `test_no_plant_count_language` | A5 | — |
+| D_007 | Fixtures must validate against contract schemas | ADR-0008 | `contracts/validate.py` in CI | A0 | WIP — script exists and passes, but `contracts/fixtures/patrol_20260813_1430/` has no actual data files yet, only a README of hand-computed expected values |
 
 ---
 

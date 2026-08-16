@@ -264,3 +264,60 @@ class Store:
             "SELECT COUNT(*) FROM analysis WHERE patrol_id = ?", (patrol_id,)
         ).fetchone()
         return row[0] if row else 0
+
+    def telemetry_for_patrol(self, patrol_id: str) -> list[TelemetryPacket]:
+        """Fetch all stored telemetry for `patrol_id`, ordered by `seq`, as `TelemetryPacket`s.
+
+        Re-parses each stored row back into the full typed model (unlike
+        `received_telemetry_seqs`, which only returns bare `seq` numbers) —
+        this is the row-level data `pipeline/segment.py::segment_patrol`
+        (A2) actually assigns to zones. `zone_id` is read back as whatever
+        DR sent; note AI does not trust it for segmentation (ICD §C1.2) even
+        though it round-trips here.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT seq, ts_ms, zone_id, temp_c, humid_pct, speed_mps, steer, ultra_cm, state
+            FROM telemetry WHERE patrol_id = ? ORDER BY seq
+            """,
+            (patrol_id,),
+        ).fetchall()
+        return [
+            TelemetryPacket(
+                patrol_id=patrol_id,
+                seq=r[0],
+                ts_ms=r[1],
+                type="TELEMETRY",
+                zone_id=r[2],
+                env={"temp_c": r[3], "humid_pct": r[4]},
+                drive={"speed_mps": r[5], "steer": r[6], "ultra_cm": r[7], "state": r[8]},
+            )
+            for r in rows
+        ]
+
+    def analysis_for_patrol(self, patrol_id: str) -> list[AnalysisResult]:
+        """Fetch all stored VIS analysis for `patrol_id`, ordered by `captured_at_ms`, as `AnalysisResult`s.
+
+        Re-parses each stored row's JSON-encoded `detections` column back
+        into typed `Detection` models. This is the row-level data
+        `pipeline/segment.py::segment_patrol` (A2) assigns to zones by
+        `captured_at_ms`.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT image_id, captured_at_ms, image_path, image_quality, detections
+            FROM analysis WHERE patrol_id = ? ORDER BY captured_at_ms
+            """,
+            (patrol_id,),
+        ).fetchall()
+        return [
+            AnalysisResult(
+                image_id=r[0],
+                patrol_id=patrol_id,
+                captured_at_ms=r[1],
+                image_path=r[2],
+                image_quality=r[3],
+                detections=json.loads(r[4]),
+            )
+            for r in rows
+        ]

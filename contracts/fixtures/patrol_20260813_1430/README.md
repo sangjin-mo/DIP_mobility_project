@@ -13,7 +13,7 @@ Deliberately exercises edge cases rather than a happy path:
 | Emergency stop mid-zone | `seq` 6–7, 10 s stopped inside zone 1 |
 | Zone boundary after a stop | zone 2 starts at `event_seq` 3, unshifted by the stop |
 | Image below quality floor | `z1_003` at 0.31, must be excluded from selection |
-| Zone with 100% 판단불가 | `z1_003`, drives the `재촬영_필요` flag |
+| Image 100% 판단불가 | `z1_003` — contributes to zone 1's `undetermined_rate`, which lands exactly at the flag threshold (see below) without crossing it |
 | Image with zero detections | `z2_001`, must not divide by zero |
 | Transit segment | `seq` 0–1 before the first `ZONE_ENTER`, `zone_id` 0 |
 
@@ -27,8 +27,13 @@ Derived by hand. Any implementation must reproduce these exactly.
 - Zone 1 observations: 정상 10, 미성숙 2, 병충해_의심 2, 판단불가 6
 - Zone 1 `undetermined_rate` 0.30 — **not** above the 0.30 threshold, so no
   `재촬영_필요` flag. Boundary case, deliberately.
-- Zone 1 status 이상 (병충해_의심 2/14 = 0.143 ≤ 0.15, but an EMERGENCY_STOP
-  occurred → 주의; verify your rule ordering against this)
+- Zone 1 status **주의** — 병충해_의심 ratio 2/14 = 0.143 is > 0.05 but ≤ 0.15
+  (not 이상); an EMERGENCY_STOP also occurred in this zone, which
+  independently forces 주의 per spec §6's status rule. Either condition
+  alone is sufficient — this fixture deliberately has both, so an
+  implementation that gets only one of the two rule branches right still
+  produces the correct status here. Don't let that mask a bug: test the two
+  branches separately elsewhere, not just against this fixture.
 - Zone 2: temp avg 28.1 (n=3), no observations, `undetermined_rate` null
 
 ## Regenerating
