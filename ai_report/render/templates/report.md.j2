@@ -3,6 +3,7 @@
 ## 순찰 요약
 {% if llm %}
 {{ llm.summary_ko }}
+{{ llm.overall_note_ko }}
 {% else %}
 {{ "LLM 분석이 포함되지 않은 자동 생성 리포트입니다." }}
 {% endif %}
@@ -31,9 +32,12 @@
 {% if zv.image_note %}
 {{ zv.image_note }}
 {% endif %}
-{% if llm and zv.zone_id in llm.zone_notes %}
-{{ llm.zone_notes[zv.zone_id] }}
+{% if zv.growth_note_ko %}
+{{ zv.growth_note_ko }}
 {% endif %}
+{% for line in zv.visual_finding_lines %}
+{{ line }}
+{% endfor %}
 
 {% endfor %}
 {% else %}
@@ -57,6 +61,11 @@
 {% else %}
 {{ "통로 장애 이벤트가 기록되지 않았습니다." }}
 {% endif %}
+{% if llm %}
+{% for line in llm.path_obstructions_ko %}
+- {{ line }}
+{% endfor %}
+{% endif %}
 
 ## 권장 조치
 {% if recommendation_lines %}
@@ -65,6 +74,12 @@
 {% endfor %}
 {% else %}
 {{ "현재 특별한 조치가 필요한 구역이 없습니다." }}
+{% endif %}
+{% for line in llm_recommendation_lines %}
+- {{ line }}
+{% endfor %}
+{% if llm %}
+{{ llm.next_patrol_suggestion_ko }}
 {% endif %}
 
 ## 데이터 한계
@@ -77,4 +92,9 @@
 {% endif %}
 {% if not agg.llm.enabled %}
 - {{ "LLM 분석이 포함되지 않은 자동 생성 리포트입니다. 서술 내용 없이 수치와 규칙 기반 판정만 포함합니다." }}
+{% endif %}
+{% if llm %}
+{% for line in llm.data_limitations_ko %}
+- {{ line }}
+{% endfor %}
 {% endif %}

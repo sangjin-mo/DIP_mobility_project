@@ -20,11 +20,11 @@ Update the Status column as phases complete. This table is what a reviewer check
 | AI_101.4 † | 이미지 선정 기준 정의 | spec §7 | `pipeline/select_images.py` | `test_anomaly_exemplar_picked_first_highest_quality_among_disease_images`, `test_quality_floor_excludes_low_quality_images_entirely` | A4 | ✓ |
 | AI_101.5 † | 구역 경계 판정 | ADR-0003, ICD C1.2 | `pipeline/segment.py` | `test_emergency_stop_does_not_shift_boundary`, `test_fallback_segmentation_when_no_zone_enter_events` | A2 | ✓ |
 | AI_101.6 † | 데이터 완전성 측정 | ICD C1.3 | `ingest/store.py` | `test_loss_rate_with_gap`, `test_loss_rate_none_when_empty` | A1 | ✓ |
-| AI_102.1 | AI 리포트 생성 요청 | spec §9 | `llm/client.py` | `test_llm_call_mocked` | A5 | — |
-| AI_102.2 | 분석 시스템 프롬프트 정의 | spec §9.2 | `llm/prompts.py` | `test_prompt_prohibitions` | A5 | — |
+| AI_102.1 | AI 리포트 생성 요청 | spec §9 | `llm/client.py` | `test_happy_path_returns_output_and_metadata` | A5 | ✓ |
+| AI_102.2 | 분석 시스템 프롬프트 정의 | spec §9.2 | `llm/prompts.py` | `test_scan_prohibited_language_detects_causal_connectors`, `test_scan_prohibited_language_detects_plant_count_words` | A5 | ✓ |
 | AI_102.3 | 리포트 및 메타데이터 저장 | ICD C3.1 | `storage/layout.py` | `test_no_partial_directory_is_ever_observable_at_the_final_path`, `test_a_failed_write_does_not_touch_an_existing_report` | A3 | ✓ |
-| AI_102.4 † | 리포트 생성 실패 처리 | spec §12 | `llm/client.py` | `test_retry_then_fallback` | A6 | — |
-| AI_102.5 † | 프롬프트·모델 버전 기록 | ICD C3.3 | `llm/client.py` | `test_prompt_version_recorded` | A6 | — |
+| AI_102.4 † | 리포트 생성 실패 처리 | spec §12 | `llm/client.py` | `test_retries_exhausted_falls_back_gracefully`, `test_no_retry_on_bad_request`, `test_schema_invalid_response_falls_back_gracefully` | A5 | ✓ |
+| AI_102.5 † | 프롬프트·모델 버전 기록 | ICD C3.3 | `llm/client.py` | `test_happy_path_returns_output_and_metadata` | A5 | ✓ (version-bump-catching test itself still A6) |
 | AI_103 † | 리포트 재생성 | spec §11 | `cli.py` | `test_regenerate_from_payload` | A6 | — |
 | AI_104 † | 회차 간 비교 | — | — | — | A7 | deferred |
 
@@ -38,12 +38,12 @@ These emerged from ADRs. They are real requirements and need tests, but no custo
 
 | Derived ID | Requirement | Source | Test | Phase | Status |
 |---|---|---|---|---|---|
-| D_001 | The LLM must not compute or restate numbers | ADR-0004 | `test_numbers_come_from_aggregate` | A5 | — |
+| D_001 | The LLM must not compute or restate numbers | ADR-0004 | `test_schema_has_no_numeric_fields_except_zone_id` | A5 | ✓ — enforced structurally by the output schema, not a runtime scan |
 | D_002 | Aggregation must be deterministic | ADR-0004 | `test_aggregate_is_deterministic` | A2 | ✓ |
 | D_003 | A complete report must be producible with the LLM disabled | ADR-0004 | `test_llm_disabled_uses_fallback_summary_and_states_limitation` | A3 | ✓ |
 | D_004 | Report Markdown must always contain six H2 sections in order | ADR-0005, ICD C3.2 | `test_six_sections_present_and_ordered`, `test_six_sections_present_with_zero_zones` | A3 | ✓ |
 | D_005 | Unknown VIS state enum values must raise, never coerce | ICD C2.3 | `test_unknown_state_raises` (ingest), `test_unknown_vis_state_raises_rather_than_coerces` (aggregate) | A2 | ✓ |
-| D_006 | Output must use 관측 수, never 개체 수 | ADR-0006 | `test_no_plant_count_language` | A5 | — |
+| D_006 | Output must use 관측 수, never 개체 수 | ADR-0006 | `test_scan_prohibited_language_detects_plant_count_words` | A5 | ✓ |
 | D_007 | Fixtures must validate against contract schemas | ADR-0008 | `contracts/validate.py` in CI | A0 | WIP — script exists and passes, but `contracts/fixtures/patrol_20260813_1430/` has no actual data files yet, only a README of hand-computed expected values |
 
 ---

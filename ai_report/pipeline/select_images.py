@@ -22,12 +22,16 @@ slot, full stop.
 Called by: whatever runs the pipeline for a patrol — currently only
 `tests/test_select_images.py`; production orchestration (on `PATROL_END` +
 VIS `_COMPLETE`) is a later phase's addition. `select_images_for_zone` and
-`apply_image_selection` are pure (no I/O); `copy_and_resize_images` is the
-only function here that touches the filesystem.
+`apply_image_selection` are pure (no I/O); `copy_and_resize_images` writes
+resized copies to disk, and `load_selected_images` (used by
+`llm/client.py::generate_report`) reads and resizes the same images into
+memory instead — see that function's docstring for why these are two
+separate entry points rather than one.
 """
 
 from __future__ import annotations
 
+import io
 import logging
 import statistics
 from pathlib import Path
@@ -146,6 +150,53 @@ def apply_image_selection(
     return agg.model_copy(update={"zones": new_zones})
 
 
+def _resize_image_bytes(src: Path, settings: Settings) -> bytes | None:
+    """Resize one image file to `IMAGE_RESIZE_PX` on the long edge, returning JPEG bytes.
+
+    Returns `None` (rather than raising) on a missing or undecodable
+    source file — CLAUDE.md's "never fabricate data on missing input"
+    extends to not letting one bad file abort an entire report. Shared by
+    `copy_and_resize_images` (writes the bytes to disk) and
+    `load_selected_images` (keeps them in memory for the LLM call) so the
+    resize logic — and its `IMAGE_RESIZE_PX`/`IMAGE_JPEG_QUALITY` config —
+    exists in exactly one place.
+    """
+    if not src.is_file():
+        logger.warning("image source file missing at %s; skipping", src)
+        return None
+    try:
+        with Image.open(src) as img:
+            img = img.convert("RGB")
+            img.thumbnail((settings.IMAGE_RESIZE_PX, settings.IMAGE_RESIZE_PX))
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=settings.IMAGE_JPEG_QUALITY)
+            return buf.getvalue()
+    except OSError:
+        logger.warning("image at %s could not be read/resized; skipping", src)
+        return None
+
+
+def _selected_image_sources(
+    agg: PatrolAggregate, segmentation: PatrolSegmentation, data_root: Path
+) -> list[tuple[str, Path]]:
+    """`(image_id, source_path)` for every selected image across every zone, in zone order.
+
+    Called by both `copy_and_resize_images` and `load_selected_images` so
+    the "which images, from where" logic — looking `image_id` up against
+    every zone's analysis rows to find its `image_path` — isn't duplicated.
+    """
+    image_id_to_result = {a.image_id: a for window in segmentation.zones() for a in window.analysis}
+    sources: list[tuple[str, Path]] = []
+    for zone in agg.zones:
+        for image_id in zone.image_ids:
+            result = image_id_to_result.get(image_id)
+            if result is None:
+                logger.warning("selected image_id=%s has no matching analysis row; skipping", image_id)
+                continue
+            sources.append((image_id, Path(data_root) / result.image_path))
+    return sources
+
+
 def copy_and_resize_images(
     agg: PatrolAggregate, segmentation: PatrolSegmentation, data_root: Path, dest_dir: Path, settings: Settings
 ) -> list[str]:
@@ -162,41 +213,49 @@ def copy_and_resize_images(
     end-to-end smoke test caught during development (see the `[!FLAG]` in
     `storage/layout.py`).
 
-    Source images are located via `AnalysisResult.image_path` (relative to
-    `data_root`), looked up by `image_id` across every zone's analysis
-    rows. A missing or unreadable source file is logged and skipped rather
-    than raising — CLAUDE.md's "never fabricate data on missing input"
-    extends to not letting one bad file abort an entire report. Output
-    files are named `{image_id}.jpg` regardless of the source extension,
-    matching ICD §C3.1's `images/z3_007.jpg` convention.
+    Output files are named `{image_id}.jpg` regardless of the source
+    extension, matching ICD §C3.1's `images/z3_007.jpg` convention.
 
     Returns the list of image_ids actually copied (a subset of every
-    zone's `image_ids` if any source file was missing).
+    zone's `image_ids` if any source file was missing or unreadable — see
+    `_resize_image_bytes`).
     """
-    image_id_to_result = {a.image_id: a for window in segmentation.zones() for a in window.analysis}
     images_dir = Path(dest_dir) / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
     copied: list[str] = []
-    for zone in agg.zones:
-        for image_id in zone.image_ids:
-            result = image_id_to_result.get(image_id)
-            if result is None:
-                logger.warning("selected image_id=%s has no matching analysis row; skipping", image_id)
-                continue
-            src = Path(data_root) / result.image_path
-            if not src.is_file():
-                logger.warning("selected image_id=%s source file missing at %s; skipping", image_id, src)
-                continue
-            dst = images_dir / f"{image_id}.jpg"
-            try:
-                with Image.open(src) as img:
-                    img = img.convert("RGB")
-                    img.thumbnail((settings.IMAGE_RESIZE_PX, settings.IMAGE_RESIZE_PX))
-                    img.save(dst, "JPEG", quality=settings.IMAGE_JPEG_QUALITY)
-            except OSError:
-                logger.warning("image_id=%s at %s could not be read/resized; skipping", image_id, src)
-                continue
-            copied.append(image_id)
+    for image_id, src in _selected_image_sources(agg, segmentation, data_root):
+        data = _resize_image_bytes(src, settings)
+        if data is None:
+            continue
+        (images_dir / f"{image_id}.jpg").write_bytes(data)
+        copied.append(image_id)
 
     return copied
+
+
+def load_selected_images(
+    agg: PatrolAggregate, segmentation: PatrolSegmentation, data_root: Path, settings: Settings
+) -> dict[str, bytes]:
+    """Resize every selected image and return `{image_id: jpeg_bytes}`, in memory.
+
+    Used by `llm/client.py::generate_report` to build the vision message
+    content for the API call. Deliberately independent of
+    `copy_and_resize_images`'s `dest_dir`/atomic-swap timing (see that
+    function's docstring) — the LLM call must run *before*
+    `storage/layout.py::write_report` (its output feeds the render step),
+    while `copy_and_resize_images` runs *as one of `write_report`'s*
+    `extra_writers`. Both ultimately call the same `_resize_image_bytes`,
+    so an image is resized identically whichever path uses it; the API
+    call and the archived copy in the report directory just aren't
+    guaranteed to be produced from the same resize invocation.
+
+    An image whose source is missing or unreadable is omitted from the
+    result (not raised) — same reasoning as `copy_and_resize_images`.
+    """
+    images: dict[str, bytes] = {}
+    for image_id, src in _selected_image_sources(agg, segmentation, data_root):
+        data = _resize_image_bytes(src, settings)
+        if data is not None:
+            images[image_id] = data
+    return images

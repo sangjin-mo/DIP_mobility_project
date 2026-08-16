@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import re
 
+from ai_report.llm.schema import LlmReportOutput, ZoneNote
 from ai_report.models import (
     DataCompleteness,
+    EventMessage,
+    EventType,
     LlmMetadata,
     PatrolAggregate,
     ReportStatus,
@@ -15,6 +18,31 @@ from ai_report.pipeline.segment import PatrolSegmentation, ZoneWindow
 from ai_report.render.markdown import render_report
 
 PATROL_ID = "20260813_1430"
+
+
+def make_llm_output(zones: list[ZoneNote] | None = None, **overrides) -> LlmReportOutput:
+    defaults = {
+        "summary_ko": "요약입니다.",
+        "overall_note_ko": "종합 소견입니다.",
+        "zones": zones or [],
+        "path_obstructions_ko": [],
+        "data_limitations_ko": [],
+        "next_patrol_suggestion_ko": "다음 순찰 제안입니다.",
+    }
+    defaults.update(overrides)
+    return LlmReportOutput.model_validate(defaults)
+
+
+def make_zone_note(zone_id: int = 1, **overrides) -> ZoneNote:
+    defaults = {
+        "zone_id": zone_id,
+        "growth_note_ko": "생육 소견입니다.",
+        "env_note_ko": "환경 소견입니다.",
+        "visual_findings_ko": ["시각 소견1"],
+        "recommended_actions_ko": ["권장 조치1"],
+    }
+    defaults.update(overrides)
+    return ZoneNote.model_validate(defaults)
 
 # ICD §C3.2 — these six H2 headings, in this order, always.
 _EXPECTED_SECTIONS = [
@@ -162,8 +190,6 @@ def test_no_flags_produces_default_recommendation_text():
 
 
 def test_obstruction_events_listed_per_zone():
-    from ai_report.models import EventMessage, EventType
-
     zone_window = ZoneWindow(
         zone_id=1, start_ts_ms=0, end_ts_ms=1000, telemetry=[], analysis=[],
         events=[
@@ -205,3 +231,86 @@ def test_zone_with_selected_images_omits_image_note():
     agg = make_aggregate([one_zone(1, image_ids=["z1_003", "z1_007"])])
     md = render_report(agg, make_segmentation())
     assert "이미지 없음" not in md
+
+
+def test_llm_summary_and_overall_note_appear_in_patrol_summary():
+    agg = make_aggregate([one_zone(1)])
+    llm = make_llm_output(summary_ko="요약 문장.", overall_note_ko="종합 문장.")
+    md = render_report(agg, make_segmentation(), llm=llm)
+    assert "요약 문장." in md
+    assert "종합 문장." in md
+
+
+def test_llm_growth_note_and_visual_findings_appear_per_zone():
+    agg = make_aggregate([one_zone(1)])
+    llm = make_llm_output(zones=[make_zone_note(1, growth_note_ko="생육 특이사항.", visual_findings_ko=["잎 색상 양호"])])
+    md = render_report(agg, make_segmentation(), llm=llm)
+    assert "생육 특이사항." in md
+    assert "- 잎 색상 양호" in md
+
+
+def test_llm_env_note_appended_to_env_line_with_em_dash():
+    agg = make_aggregate([one_zone(1)])
+    llm = make_llm_output(zones=[make_zone_note(1, env_note_ko="온습도 안정적.")])
+    md = render_report(agg, make_segmentation(), llm=llm)
+    env_line = next(line for line in md.splitlines() if line.startswith("- 1구역: "))
+    assert env_line.endswith("— 온습도 안정적.")
+
+
+def test_llm_path_obstructions_appended_alongside_deterministic_bullets():
+    zone_window = ZoneWindow(
+        zone_id=1, start_ts_ms=0, end_ts_ms=1000, telemetry=[], analysis=[],
+        events=[EventMessage(patrol_id=PATROL_ID, event_seq=0, ts_ms=100, type=EventType.EMERGENCY_STOP)],
+    )
+    agg = make_aggregate([one_zone(1)])
+    llm = make_llm_output(path_obstructions_ko=["1구역에서 비상정지가 함께 관찰됨."])
+    md = render_report(agg, make_segmentation([zone_window]), llm=llm)
+    assert "1구역: EMERGENCY_STOP 1회" in md  # deterministic bullet still present
+    assert "1구역에서 비상정지가 함께 관찰됨." in md  # LLM prose appended
+
+
+def test_llm_recommended_actions_appended_with_zone_prefix():
+    agg = make_aggregate([one_zone(1)])
+    llm = make_llm_output(zones=[make_zone_note(1, recommended_actions_ko=["정기 관수 유지"])])
+    md = render_report(agg, make_segmentation(), llm=llm)
+    assert "1구역: 정기 관수 유지" in md
+
+
+def test_llm_next_patrol_suggestion_appears_in_recommendations():
+    agg = make_aggregate([one_zone(1)])
+    llm = make_llm_output(next_patrol_suggestion_ko="다음 순찰은 오전에 권장됩니다.")
+    md = render_report(agg, make_segmentation(), llm=llm)
+    assert "다음 순찰은 오전에 권장됩니다." in md
+
+
+def test_llm_data_limitations_appended_alongside_deterministic_bullets():
+    agg = make_aggregate([one_zone(1)])
+    llm = make_llm_output(data_limitations_ko=["일부 이미지 품질이 낮았습니다."])
+    md = render_report(agg, make_segmentation(), llm=llm)
+    assert "UDP 패킷 수신" in md  # deterministic bullet still present
+    assert "일부 이미지 품질이 낮았습니다." in md
+
+
+def test_llm_note_for_unknown_zone_id_produces_no_content():
+    """The zone_id-dropping itself is llm/client.py's job (spec §9); this
+    proves render_report is independently robust even if unfiltered LLM
+    output reaches it — an orphaned zone note just has nothing to attach to.
+    """
+    agg = make_aggregate([one_zone(1)])  # only zone 1 exists in the aggregate
+    llm = make_llm_output(zones=[make_zone_note(99, growth_note_ko="존재하지 않는 구역 소견")])
+    md = render_report(agg, make_segmentation(), llm=llm)
+    assert "존재하지 않는 구역 소견" not in md
+
+
+def test_deterministic_sections_identical_with_and_without_llm():
+    """Hard rule 1: LLM content is always additive, never a replacement —
+    every deterministic figure/status must render identically whether or
+    not llm is provided.
+    """
+    agg = make_aggregate([one_zone(1)], overall_status=ReportStatus.CAUTION)
+    without_llm = render_report(agg, make_segmentation())
+    with_llm = render_report(agg, make_segmentation(), llm=make_llm_output(zones=[make_zone_note(1)]))
+    assert "**주의**" in without_llm
+    assert "**주의**" in with_llm
+    assert "| tomato | 정상 | 8 |" in without_llm
+    assert "| tomato | 정상 | 8 |" in with_llm

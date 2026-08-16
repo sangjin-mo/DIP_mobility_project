@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     PROMPT_VERSION: str = "v1.0"
     OPENAI_API_KEY: str | None = None  # env only; never logged, never committed
 
+    # Retry backoff (spec §9: "3 attempts, exponential backoff 2/4/8 s") —
+    # 3 retries beyond the first attempt (4 attempts total), backoff before
+    # retry i is LLM_RETRY_BACKOFF_BASE_S * 2**(i-1): 2s, 4s, 8s.
+    LLM_RETRY_BACKOFF_BASE_S: float = 2.0
+
+    # Cost metering (spec §8: "gpt-5.6-luna rates ($0.20 / $1.20 per 1M)").
+    LLM_INPUT_COST_PER_1M_USD: float = 0.20
+    LLM_OUTPUT_COST_PER_1M_USD: float = 1.20
+
     @property
     def sqlite_path(self) -> Path:
         """Where `ingest/store.py::Store` opens its SQLite file: `DATA_ROOT/sessions.db`.

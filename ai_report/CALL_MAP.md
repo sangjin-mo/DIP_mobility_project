@@ -2,19 +2,21 @@
 
 Which function calls which, and who runs each module. Covers A1
 (`ingest/` + `devtools/`), A2 (`pipeline/segment.py`, `pipeline/aggregate.py`),
-A3 (`render/` + `storage/`), and A4 (`pipeline/select_images.py`,
-`pipeline/payload.py`); it will grow further as `llm/` (A5) lands. See
-`../02-ai-subsystem-spec.md` §2 for the intended full module layout and
-`../01-interface-contracts.md` for the contracts these modules implement.
+A3 (`render/` + `storage/`), A4 (`pipeline/select_images.py`,
+`pipeline/payload.py`), and A5 (`llm/`). See `../02-ai-subsystem-spec.md`
+§2 for the intended full module layout and `../01-interface-contracts.md`
+for the contracts these modules implement.
 
 **There is still no production orchestration.** Nothing in this codebase
 yet calls `segment_patrol` → `aggregate` → `apply_image_selection` →
-`build_payload` → `render_report` → `write_report` automatically when a
-patrol finishes (`PATROL_END` + VIS `_COMPLETE`) — that glue is a later
-addition (likely `cli.py`, once the trigger condition needs watching for).
-Today that whole chain is only exercised by tests and by manual scripts,
-such as the one used to smoke-test A2–A4 end to end against a real running
-server. See "What's not wired up yet" at the bottom.
+`build_payload` → `llm.client.generate_report` → `render_report` →
+`write_report` automatically when a patrol finishes (`PATROL_END` + VIS
+`_COMPLETE`) — that glue is a later addition (likely `cli.py`, once the
+trigger condition needs watching for). Today that whole chain is only
+exercised by tests and by manual scripts, such as the one used to
+smoke-test A2–A5 end to end against a real running server (with a mocked
+OpenAI client — CLAUDE.md's API key is never touched by anything in this
+repo's own test/smoke tooling). See "What's not wired up yet" at the bottom.
 
 ## Two runtime processes, one shared package
 
@@ -68,7 +70,7 @@ flowchart TB
     STOREW3 --> DB
 ```
 
-## The A2–A4 pipeline (no automatic trigger yet)
+## The A2–A5 pipeline (no automatic trigger yet)
 
 Given a `patrol_id`, this is the chain that turns ingested rows into a
 report on disk. Every arrow below is a real function call once something
@@ -83,7 +85,11 @@ flowchart LR
     SEG -.->|"segmentation also passed in"| SEL
     SEL -->|"PatrolAggregate\n(image_ids populated)"| PAY["pipeline.payload.build_payload()"]
     SEG -.->|"segmentation also passed in\n(for obstructions)"| PAY
-    SEL -->|"PatrolAggregate"| REN["render.markdown.render_report()"]
+    SEL -.->|"load_selected_images()"| IMGBYTES["images: dict[str, bytes]"]
+    PAY -->|"Payload"| LLM["llm.client.generate_report()"]
+    IMGBYTES -.-> LLM
+    LLM -->|"LlmReportOutput | None,\nLlmMetadata"| REN["render.markdown.render_report()"]
+    SEL -->|"PatrolAggregate\n(with llm= merged in)"| REN
     SEG -.->|"segmentation also passed in\n(for obstruction_counts)"| REN
     REN -->|"Markdown string"| ST["storage.layout.write_report()"]
     SEL -->|"PatrolAggregate\n(for metadata.json)"| ST
@@ -94,11 +100,16 @@ flowchart LR
     ST --> FS[("reports/{patrol_id}/\nreport.md + metadata.json\n+ payload.json + images/")]
 
     classDef det stroke:#10B981,stroke-width:2px
+    classDef net stroke:#EF4444,stroke-width:2px
     class SEG,AGG,SEL,PAY,REN,ST det
+    class LLM net
 ```
 
 Green stages match spec §1's architecture diagram — deterministic,
-network-free. Two non-obvious wiring details:
+network-free. Red is the one stage that touches the network at all
+(`llm.client.generate_report` — everything else in this diagram, including
+every test that exercises it, never makes a real call). Three non-obvious
+wiring details:
 
 - `render_report` needing *both* `PatrolAggregate` and `PatrolSegmentation`:
   `ZoneMetadata` (what `aggregate()` returns per zone) deliberately
@@ -111,6 +122,14 @@ network-free. Two non-obvious wiring details:
   report path directly — a real bug (images silently discarded by the
   atomic swap) was found this way during A4's end-to-end smoke test; see
   the `[!FLAG]` in `storage/layout.py`.
+- `generate_report`'s `LlmMetadata` return value must be merged into
+  `PatrolAggregate.llm` (e.g. `agg.model_copy(update={"llm": llm_metadata})`)
+  *before* `write_report` runs, so `metadata.json` reflects the real
+  `enabled`/`model`/token/cost figures instead of `aggregate()`'s original
+  `LlmMetadata(enabled=False)` placeholder. `render_report`'s `llm=`
+  argument takes the *content* (`LlmReportOutput | None`) separately —
+  the two are threaded through independently because one goes into
+  `metadata.json` and the other only ever appears in `report.md`.
 
 ## Per-module function reference
 
@@ -241,9 +260,11 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_obstruction_line` | — | `_build_zone_views` |
 | `_recommendation_line` | — | `_build_zone_views` |
 | `_image_note` | — | `_build_zone_views` |
-| `_build_zone_views` | `_env_line`, `_observation_lines`, `_obstruction_line`, `_recommendation_line`, `_image_note` | `render_report` |
+| `_env_note_suffix` | — | `_build_zone_views` |
+| `_build_zone_views` | `_env_line`, `_observation_lines`, `_obstruction_line`, `_recommendation_line`, `_image_note`, `_env_note_suffix` | `render_report` |
+| `_llm_recommendation_lines` | — | `render_report` |
 | `_jinja_env` | `jinja2.Environment(...)` | `render_report` |
-| `render_report` | `PatrolSegmentation.obstruction_counts`, `_build_zone_views`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; production caller once orchestration exists |
+| `render_report` | `PatrolSegmentation.obstruction_counts`, `_build_zone_views`, `_llm_recommendation_lines`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; production caller once orchestration exists |
 
 ### `pipeline/select_images.py`
 
@@ -252,7 +273,10 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_count_state` / `_has_state` | — | `select_images_for_zone` |
 | `select_images_for_zone` | `_count_state`, `_has_state`, `statistics.median` | `apply_image_selection`; directly by `tests/test_select_images.py` |
 | `apply_image_selection` | `select_images_for_zone`, `PatrolSegmentation.zones` | whatever runs the pipeline for a patrol; `tests/test_select_images.py` |
-| `copy_and_resize_images` | `PatrolSegmentation.zones`, `PIL.Image.open`/`.thumbnail`/`.save` | passed to `storage/layout.py::write_report` via `extra_writers`; directly by `tests/test_select_images.py` |
+| `_resize_image_bytes` | `PIL.Image.open`/`.thumbnail`/`.save` | `copy_and_resize_images`, `load_selected_images` |
+| `_selected_image_sources` | `PatrolSegmentation.zones` | `copy_and_resize_images`, `load_selected_images` |
+| `copy_and_resize_images` | `_selected_image_sources`, `_resize_image_bytes` | passed to `storage/layout.py::write_report` via `extra_writers`; directly by `tests/test_select_images.py` |
+| `load_selected_images` | `_selected_image_sources`, `_resize_image_bytes` | passed to `llm/client.py::generate_report` as its `images` argument; directly by `tests/test_select_images.py` |
 
 ### `pipeline/payload.py`
 
@@ -270,15 +294,45 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_write_files` | writes `report.md`, `metadata.json` into a tmp dir | `write_report` (and monkeypatched directly by `tests/test_layout.py` to simulate a write failure mid-way) |
 | `write_report` | `_write_files`, each function in `extra_writers` (e.g. `select_images.copy_and_resize_images`, `payload.write_payload`), `os.replace` (the atomic directory swap) | `tests/test_layout.py`; production orchestration once it exists |
 
+### `llm/schema.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `_make_strict` | recurses into `$defs`/`properties`/`items` | `output_json_schema` |
+| `output_json_schema` | `LlmReportOutput.model_json_schema()`, `_make_strict` | `llm/client.py::_call_with_retry` (built once per call, passed as `response_format`); directly by `tests/test_llm_schema.py` |
+
+`LlmReportOutput`/`ZoneNote` themselves are constructed by
+`LlmReportOutput.model_validate_json(...)` inside `llm/client.py::generate_report`
+(parsing the API response) — see `models.py`-style "Constructed by / Parsed
+by" framing in that module's own docstring.
+
+### `llm/prompts.py`
+
+`SYSTEM_PROMPT` is a plain string constant, not a function — read directly
+by `llm/client.py::_build_messages` as the API request's system message.
+
+### `llm/client.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `_build_messages` | `json.dumps`, `base64.b64encode` | `generate_report` |
+| `_compute_cost_usd` | — | `generate_report` |
+| `_scan_prohibited_language` | — | `generate_report`; directly by `tests/test_llm_client.py`'s adversarial-fixture tests |
+| `_drop_unknown_zones` | — | `generate_report` |
+| `_call_with_retry` | `client.chat.completions.create` (the only real network call anywhere in this codebase), `asyncio.sleep` | `generate_report` |
+| `generate_report` | `_build_messages`, `output_json_schema`, `_call_with_retry`, `LlmReportOutput.model_validate_json`, `_scan_prohibited_language`, `_drop_unknown_zones`, `_compute_cost_usd`; constructs `LlmMetadata` | whatever runs the pipeline for a patrol, right after `pipeline/payload.py::build_payload`; `tests/test_llm_client.py` (always with an injected mock `client`, never a real `AsyncOpenAI`) |
+
 ## What's not wired up yet
 
-Nothing yet calls the A2–A4 chain (`segment_patrol` → `aggregate` →
-`apply_image_selection` → `build_payload` → `render_report` →
-`write_report`) automatically on `PATROL_END` + VIS `_COMPLETE` — see this
-doc's intro. `VisWatcher.watch` is the other still-unwired piece: it
-exists for A1's polling-until-complete behaviour, but nothing calls it
-outside tests either. All of this is reachable today only from tests and
-from ad hoc scripts, such as the manual smoke test (real `ai-report serve`
-process, real `fake_rover`/`fake_vis` traffic, then a short script running
-the full A1–A4 chain by hand, including `write_report`'s `extra_writers`)
-used to verify A2–A4 end to end.
+Nothing yet calls the A2–A5 chain (`segment_patrol` → `aggregate` →
+`apply_image_selection` → `build_payload` → `llm.client.generate_report` →
+`render_report` → `write_report`) automatically on `PATROL_END` + VIS
+`_COMPLETE` — see this doc's intro. `VisWatcher.watch` is the other
+still-unwired piece: it exists for A1's polling-until-complete behaviour,
+but nothing calls it outside tests either. All of this is reachable today
+only from tests and from ad hoc scripts, such as the manual smoke test
+(real `ai-report serve` process, real `fake_rover`/`fake_vis` traffic, then
+a short script running the full A1–A5 chain by hand — including a mocked
+`AsyncOpenAI` client, since no test or smoke script in this repo ever makes
+a real LLM call — and `write_report`'s `extra_writers`) used to verify
+A2–A5 end to end.

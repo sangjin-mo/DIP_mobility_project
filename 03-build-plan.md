@@ -163,6 +163,39 @@ The emergency-stop test is the important one. Write it first.
 - Unknown `zone_id` in the response is dropped and logged
 - All tests mock the client; no test hits the network
 
+> [!FLAG] **Done 2026-08-17.** All acceptance criteria met and tested
+> (`tests/test_llm_schema.py`, `tests/test_llm_client.py`, plus new
+> LLM-wiring tests in `tests/test_markdown.py`). Notes on how each
+> criterion actually got satisfied, since a couple aren't as literal as
+> they sound:
+> - "No numeric claims that contradict the aggregate" holds *structurally*:
+>   `LlmReportOutput` (`llm/schema.py`) has no numeric field anywhere
+>   except `zone_id` (which only identifies which zone a note belongs to)
+>   — there is nowhere in the schema for a number to go, so this isn't a
+>   runtime check on generated text, it's a shape guarantee.
+> - "Prompt prohibitions verified against adversarial fixtures" — real
+>   model compliance can't be tested without a live call (forbidden by
+>   this same acceptance list). What's actually tested:
+>   `llm/client.py::_scan_prohibited_language` is a defensive runtime
+>   backstop that scans every returned `_ko` field for the banned causal
+>   connectors (때문에/로 인해/원인은/영향으로) and plant-count words
+>   (개체 수/그루/포기), independent of the prompt asking nicely; and the
+>   pipeline is proven to correctly thread an adversarial *mocked*
+>   response (e.g. a `undetermined_rate > 0.30` zone whose mocked note
+>   recommends recapture, not a diagnosis) through end to end without
+>   mangling it.
+> - Real `AsyncOpenAI` is injectable (`generate_report(..., client=...)`);
+>   every test passes a `MagicMock`/`AsyncMock` instead, so this repo's
+>   test suite makes zero real network calls, confirmed by an end-to-end
+>   smoke test that used a mocked client against a real running server for
+>   everything *except* the LLM call itself.
+> - `render/markdown.py` was reworked (not just extended) for A5's real
+>   output shape — the A3-era placeholder (`llm.summary_ko` +
+>   `llm.zone_notes[id]`) never matched spec §9's actual schema. LLM
+>   content is always additive alongside deterministic figures, never a
+>   replacement (hard rule 1): every section that has a deterministic
+>   fallback still renders it whether or not `llm` is present.
+
 ---
 
 ## A6 — Resilience and regeneration

@@ -1,8 +1,10 @@
 """⑥ Markdown rendering — spec §10, ICD §C3.2. Jinja2, never model output
-(CLAUDE.md hard rule 3): the LLM's structured JSON (when A5 exists and is
-enabled) only supplies prose strings the template drops into fixed slots.
-Every number comes from `PatrolAggregate` (hard rule 1), substituted by the
-template exactly as `aggregate()` computed it.
+(CLAUDE.md hard rule 3): the LLM's structured JSON only supplies prose
+strings the template drops into fixed slots next to figures that already
+came from `PatrolAggregate`. Every number comes from `PatrolAggregate`
+(hard rule 1) — `LlmReportOutput` (A5's `llm/schema.py`) has no numeric
+field anywhere, so there is nowhere for a model-computed number to enter
+the rendered report even by accident.
 
 `render/templates/report.md.j2` is the only place the six-H2-section
 structure (ICD §C3.2) is expressed — because it's a template with no
@@ -12,19 +14,27 @@ call, LLM enabled or not, zero zones or many. See
 `tests/test_markdown.py::test_six_sections_present_and_ordered`.
 
 Per-zone line formatting (observation table rows, env summary, obstruction
-counts, recommendations) is built as plain strings in `_build_zone_views`
-*before* the template runs, rather than inline in Jinja. This isn't a style
-preference: an earlier version built these strings with inline
-`{% if %}...{% endif %}` at the end of a content line, and Jinja's
-`trim_blocks` — which strips the newline immediately after any `%}` — ate
-the newline after those trailing `{% endif %}` tags, silently concatenating
-every zone's line onto one unreadable run-on line. Pre-formatting in Python
-means every template line either is a bare block tag (safely trimmed) or
-ends in a `{{ expression }}` (never trimmed), so there is no line where
-content and a block-tag boundary coincide.
+counts, recommendations, and now the LLM's per-zone prose) is built as
+plain strings in `_build_zone_views` *before* the template runs, rather
+than inline in Jinja. This isn't a style preference: an earlier version
+built these strings with inline `{% if %}...{% endif %}` at the end of a
+content line, and Jinja's `trim_blocks` — which strips the newline
+immediately after any `%}` — ate the newline after those trailing
+`{% endif %}` tags, silently concatenating every zone's line onto one
+unreadable run-on line. Pre-formatting in Python means every template line
+either is a bare block tag (safely trimmed) or ends in a
+`{{ expression }}` (never trimmed), so there is no line where content and
+a block-tag boundary coincide.
+
+A zone_id in `llm.zones` that doesn't match any `agg.zones` entry is
+silently absent from the rendered report — not an error here. Dropping
+and logging an unknown zone_id is `llm/client.py::_drop_unknown_zones`'s
+job (spec §9); this module only ever looks up LLM zone notes *by* a real
+`agg` zone_id, so an orphaned LLM zone note simply has nothing to attach
+to and never appears, whether or not the upstream filtering already ran.
 
 Called by: whatever assembles a report for storage — currently only
-`tests/test_markdown.py`; `storage/layout.py::write_report` (A3) is the
+`tests/test_markdown.py`; `storage/layout.py::write_report` is the
 production caller once pipeline orchestration exists.
 """
 
@@ -32,36 +42,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from ai_report.llm.schema import LlmReportOutput
 from ai_report.models import PatrolAggregate, ZoneMetadata
 from ai_report.pipeline.segment import PatrolSegmentation
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-class LlmReportContent(Protocol):
-    """Structural shape the template expects from A5's LLM output, so this
-    module can be tested and type-checked without `llm/schema.py` existing
-    yet. A5's real structured-output model should end up satisfying this
-    shape (or the template's `llm.*` references need updating together).
-    """
-
-    summary_ko: str
-    zone_notes: dict[int, str]
-
-
 @dataclass
 class ZoneView:
     """One zone's content, fully pre-formatted to strings the template just interpolates.
 
-    Built by `_build_zone_views` from a `ZoneMetadata` plus that zone's
-    obstruction-event counts. `observation_lines`/`obstruction_line`/
-    `recommendation_line` are `None`/empty exactly when that zone has
-    nothing to say for that section, so the template can test for absence
-    with a plain `{% if %}` rather than re-deriving the condition.
+    Built by `_build_zone_views` from a `ZoneMetadata`, that zone's
+    obstruction-event counts, and (when available) its `ZoneNote` from the
+    LLM. Every `_line`/`_lines` field is `None`/empty exactly when that
+    zone has nothing to say for that section, so the template can test for
+    absence with a plain `{% if %}` rather than re-deriving the condition.
     """
 
     zone_id: int
@@ -73,6 +72,8 @@ class ZoneView:
     obstruction_line: str | None
     recommendation_line: str | None
     image_note: str | None
+    growth_note_ko: str | None
+    visual_finding_lines: list[str]
 
 
 def _env_line(zone: ZoneMetadata) -> str:
@@ -102,10 +103,10 @@ def _obstruction_line(zone_id: int, counts: dict[str, int]) -> str:
 
 
 def _recommendation_line(zone: ZoneMetadata) -> str | None:
-    """A deterministic stand-in for A5's LLM-authored recommendations: for now,
-    the only rule-derivable recommendation is "recapture a flagged zone" —
-    everything else in spec §9's `recommended_actions_ko` genuinely needs
-    the model's judgement and has no fallback here. `None` when the zone
+    """A deterministic recommendation, independent of whether the LLM ran: the
+    only rule-derivable recommendation is "recapture a flagged zone" — this
+    always shows when a zone is flagged, regardless of `llm`, per hard rule 1
+    (this is a rule-based fact, not model judgement). `None` when the zone
     has no flags at all.
     """
     if "재촬영_필요" not in zone.flags:
@@ -124,10 +125,28 @@ def _image_note(zone: ZoneMetadata) -> str | None:
     return None if zone.image_ids else "이미지 없음"
 
 
-def _build_zone_views(agg: PatrolAggregate, obstructions: dict[int, dict[str, int]]) -> list[ZoneView]:
+def _env_note_suffix(zone_id: int, llm: LlmReportOutput | None, notes_by_zone: dict) -> str:
+    """`" — {env_note_ko}"` when the LLM ran and has a note for this zone, else `""`.
+
+    Matches spec §10's own template example exactly: `... (표본 {{ n }}개)
+    {% if llm %} — {{ llm.zone(z.zone_id).env_note_ko }}{% endif %}` — same
+    "em dash" separator on the same line as the deterministic env stats.
+    """
+    if llm is None:
+        return ""
+    note = notes_by_zone.get(zone_id)
+    return f" — {note.env_note_ko}" if note else ""
+
+
+def _build_zone_views(
+    agg: PatrolAggregate, obstructions: dict[int, dict[str, int]], llm: LlmReportOutput | None
+) -> list[ZoneView]:
     """Turn `agg.zones` into fully pre-formatted `ZoneView`s. See module docstring for why."""
+    notes_by_zone = {note.zone_id: note for note in llm.zones} if llm else {}
+
     views = []
     for zone in agg.zones:
+        note = notes_by_zone.get(zone.zone_id)
         views.append(
             ZoneView(
                 zone_id=zone.zone_id,
@@ -135,15 +154,35 @@ def _build_zone_views(agg: PatrolAggregate, obstructions: dict[int, dict[str, in
                 status_label=zone.status.value,
                 flags_label=f" ({', '.join(zone.flags)})" if zone.flags else "",
                 observation_lines=_observation_lines(zone),
-                env_line=_env_line(zone),
+                env_line=_env_line(zone) + _env_note_suffix(zone.zone_id, llm, notes_by_zone),
                 obstruction_line=_obstruction_line(zone.zone_id, obstructions[zone.zone_id])
                 if zone.zone_id in obstructions
                 else None,
                 recommendation_line=_recommendation_line(zone),
                 image_note=_image_note(zone),
+                growth_note_ko=note.growth_note_ko if note else None,
+                visual_finding_lines=[f"- {f}" for f in note.visual_findings_ko] if note else [],
             )
         )
     return views
+
+
+def _llm_recommendation_lines(agg: PatrolAggregate, llm: LlmReportOutput | None) -> list[str]:
+    """`"{zone_id}구역: {action}"` for every `recommended_actions_ko` entry on
+    every zone note that matches a real `agg` zone — flattened across zones
+    for the 권장 조치 section, alongside (not replacing) the deterministic
+    recapture recommendations `_recommendation_line` always produces.
+    """
+    if llm is None:
+        return []
+    valid_zone_ids = {z.zone_id for z in agg.zones}
+    lines = []
+    for note in llm.zones:
+        if note.zone_id not in valid_zone_ids:
+            continue
+        for action in note.recommended_actions_ko:
+            lines.append(f"{note.zone_id}구역: {action}")
+    return lines
 
 
 def _jinja_env() -> Environment:
@@ -169,7 +208,7 @@ def _jinja_env() -> Environment:
 def render_report(
     agg: PatrolAggregate,
     segmentation: PatrolSegmentation,
-    llm: LlmReportContent | None = None,
+    llm: LlmReportOutput | None = None,
     coverage_warn_threshold: float = 0.90,
 ) -> str:
     """Render `report.md.j2` to a Markdown string. Pure — no I/O, no network.
@@ -177,15 +216,20 @@ def render_report(
     `agg` supplies every number and status, pre-formatted per zone by
     `_build_zone_views` before the template ever runs. `segmentation`
     supplies the per-zone obstruction-event detail `agg` doesn't carry (see
-    `PatrolSegmentation.obstruction_counts`). `llm` is `None` for every
-    report until A5 exists (or on any A5 fallback) — the template's
-    `{% if llm %}` branches handle that case explicitly.
+    `PatrolSegmentation.obstruction_counts`). `llm` is the (possibly
+    already zone-filtered) structured output from
+    `llm/client.py::generate_report`, or `None` on any A5 fallback — the
+    template's `{% if llm %}` branches handle that case explicitly, and
+    every deterministic section (observation counts, recapture
+    recommendations, coverage/confidence limitations) renders identically
+    whether or not `llm` is present, per hard rule 1: LLM content is always
+    additive prose next to a figure, never a replacement for one.
     `coverage_warn_threshold` defaults to `config.COVERAGE_WARN_THRESHOLD`'s
     value but is passed as a plain float rather than a `Settings` object,
     keeping this function's dependency surface to exactly what it renders.
     """
     obstructions = segmentation.obstruction_counts()
-    zone_views = _build_zone_views(agg, obstructions)
+    zone_views = _build_zone_views(agg, obstructions, llm)
 
     template = _jinja_env().get_template("report.md.j2")
     return template.render(
@@ -194,5 +238,6 @@ def render_report(
         zone_views=zone_views,
         obstruction_lines=[zv.obstruction_line for zv in zone_views if zv.obstruction_line],
         recommendation_lines=[zv.recommendation_line for zv in zone_views if zv.recommendation_line],
+        llm_recommendation_lines=_llm_recommendation_lines(agg, llm),
         coverage_warn_threshold=coverage_warn_threshold,
     )
