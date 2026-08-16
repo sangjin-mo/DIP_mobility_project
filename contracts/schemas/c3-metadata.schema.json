@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartfarm.local/contracts/c3-metadata.schema.json",
+  "title": "C3.3 Patrol Metadata (AI to WEB, filesystem)",
+  "description": "reports/{patrol_id}/metadata.json. WEB reads this for zone-status display rather than parsing numbers out of report.md (ADR-0005). Every number here is produced by the deterministic aggregation step (pipeline/aggregate.py, phase A2) — never by the LLM. Not yet produced by any code in this repo as of phase A1; this schema is published ahead of the A2 implementation so WEB can build against it now. See 01-interface-contracts.md §C3.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "patrol_id", "patrol_date", "generated_at", "duration_min", "overall_status",
+    "llm", "data_completeness", "zones"
+  ],
+  "properties": {
+    "patrol_id": { "type": "string", "pattern": "^[0-9]{8}_[0-9]{4}$" },
+    "patrol_date": { "type": "string", "format": "date" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "duration_min": { "type": "integer", "minimum": 0 },
+    "overall_status": {
+      "enum": ["정상", "주의", "이상"],
+      "description": "The worst zone status. Drives the dashboard badge."
+    },
+    "llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "False on a fallback report (LLM call failed or was disabled). WEB should indicate reduced content."
+        },
+        "model": { "type": ["string", "null"] },
+        "prompt_version": { "type": ["string", "null"] },
+        "input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "output_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "cost_usd": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "data_completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["udp_received", "udp_expected", "rate", "images_analysed", "zone_boundary_confidence"],
+      "properties": {
+        "udp_received": { "type": "integer", "minimum": 0 },
+        "udp_expected": { "type": "integer", "minimum": 0 },
+        "rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "udp_received / udp_expected. Below 0.90 warrants a dashboard warning."
+        },
+        "images_analysed": { "type": "integer", "minimum": 0 },
+        "zone_boundary_confidence": {
+          "enum": ["high", "low"],
+          "description": "\"low\" means zones were segmented by the distance-estimation fallback, not ZONE_ENTER events (spec §5)."
+        }
+      }
+    },
+    "zones": {
+      "type": "array",
+      "description": "Zone count varies between patrols — WEB must not hardcode it. May be an empty array.",
+      "items": { "$ref": "#/$defs/zone" }
+    }
+  },
+  "$defs": {
+    "zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "zone_id", "zone_name", "status", "env", "observations",
+        "undetermined_rate", "flags", "image_ids", "confidence"
+      ],
+      "properties": {
+        "zone_id": { "type": "integer", "minimum": 1 },
+        "zone_name": { "type": "string" },
+        "status": { "enum": ["정상", "주의", "이상"] },
+        "env": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "temp_c": { "anyOf": [{ "$ref": "#/$defs/stat" }, { "type": "null" }] },
+            "humid_pct": { "anyOf": [{ "$ref": "#/$defs/stat" }, { "type": "null" }] }
+          },
+          "description": "temp_c/humid_pct are null (not omitted) when no env sensor is fitted — see the C1.1 hardware-gap flag."
+        },
+        "observations": {
+          "type": "object",
+          "description": "Keyed by crop class, then by state -> observation count. A zone with zero observations still has this key, valued {}.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "undetermined_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "null when the zone has zero total observations (denominator is 0)."
+        },
+        "flags": {
+          "type": "array",
+          "items": { "enum": ["재촬영_필요"] }
+        },
+        "image_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Resolve against images/{id}.jpg in the same report directory."
+        },
+        "confidence": { "enum": ["high", "low"] }
+      }
+    },
+    "stat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["avg", "min", "max", "n"],
+      "properties": {
+        "avg": { "type": "number" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "n": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartfarm.local/contracts/c1-telemetry.schema.json",
+  "title": "C1.1 Telemetry Packet (DR to AI, UDP)",
+  "description": "One UDP datagram, UTF-8 JSON. Max 1400 bytes serialised.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patrol_id", "seq", "ts_ms", "type", "zone_id", "env", "drive"],
+  "properties": {
+    "patrol_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}_[0-9]{4}$",
+      "description": "YYYYMMDD_HHMM, constant for the whole patrol"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic from 0 per patrol. Basis for loss calculation. Non-negotiable."
+    },
+    "ts_ms": { "type": "integer", "minimum": 0 },
+    "type": { "const": "TELEMETRY" },
+    "zone_id": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "DR best guess. AI does not trust this; see ADR-0003."
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["temp_c", "humid_pct"],
+      "description": "Null when no sensor is fitted. See ADR-0007.",
+      "properties": {
+        "temp_c": { "type": ["number", "null"], "minimum": -40, "maximum": 85 },
+        "humid_pct": { "type": ["number", "null"], "minimum": 0, "maximum": 100 }
+      }
+    },
+    "drive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["speed_mps", "steer", "ultra_cm", "state"],
+      "properties": {
+        "speed_mps": { "type": "number", "minimum": 0, "maximum": 5 },
+        "steer": { "type": "number", "minimum": -1, "maximum": 1 },
+        "ultra_cm": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Null when no ultrasonic is fitted. See ADR-0007."
+        },
+        "state": { "enum": ["RUNNING", "STOPPED", "EMERGENCY"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartfarm.local/contracts/c1-event.schema.json",
+  "title": "C1.2 Event Message (DR to AI, HTTP primary / UDP fallback)",
+  "description": "One discrete patrol event. Delivered via HTTP POST /api/events (primary) or, if DR cannot do HTTP, the identical JSON sent 3x over UDP to the telemetry port, deduplicated by (patrol_id, event_seq). See 01-interface-contracts.md §C1.2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patrol_id", "event_seq", "ts_ms", "type"],
+  "properties": {
+    "patrol_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}_[0-9]{4}$",
+      "description": "YYYYMMDD_HHMM, constant for the whole patrol. Same value as the patrol's telemetry."
+    },
+    "event_seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic from 0 per patrol, independent of telemetry's seq. Basis for the idempotent dedup that makes redelivery (HTTP retry, or the 3x UDP fallback) safe."
+    },
+    "ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Same clock basis as telemetry's ts_ms. See §C1.4."
+    },
+    "type": {
+      "enum": ["PATROL_START", "ZONE_ENTER", "EMERGENCY_STOP", "LINE_LOST", "PATROL_END"]
+    },
+    "zone_id": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Present on ZONE_ENTER (the zone being entered). Omitted or null on event types that are not zone-scoped."
+    },
+    "detail": {
+      "type": "object",
+      "description": "Type-specific payload. PATROL_START: {route_id}. EMERGENCY_STOP: {ultra_cm}. LINE_LOST: {duration_ms}. PATROL_END: {reason: completed|user_stop|fault}. ZONE_ENTER: {} (empty).",
+      "default": {}
+    }
+  }
+}

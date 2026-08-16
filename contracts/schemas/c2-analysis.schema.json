@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartfarm.local/contracts/c2-analysis.schema.json",
+  "title": "C2 Analysis Result (VIS to AI, filesystem)",
+  "description": "One JSON file per analysed image, written to data/analysis/{patrol_id}/{image_id}.json. VIS signals completion for a patrol by writing an empty data/analysis/{patrol_id}/_COMPLETE marker file (not itself JSON, not covered by this schema). See 01-interface-contracts.md §C2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image_id", "patrol_id", "captured_at_ms", "image_path", "image_quality", "detections"],
+  "properties": {
+    "image_id": {
+      "type": "string",
+      "description": "Unique within a patrol."
+    },
+    "patrol_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}_[0-9]{4}$"
+    },
+    "captured_at_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Same clock basis as C1's ts_ms — required for image-to-telemetry zone matching."
+    },
+    "image_path": {
+      "type": "string",
+      "description": "Relative to the data root, e.g. images/{patrol_id}/{file}.jpg."
+    },
+    "image_quality": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Drives image selection (spec §7). Always present, even for images with zero detections."
+    },
+    "detections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/detection" }
+    }
+  },
+  "$defs": {
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "state", "count", "confidence"],
+      "properties": {
+        "class": {
+          "type": "string",
+          "description": "Crop type, lowercase ASCII."
+        },
+        "state": {
+          "enum": ["정상", "미성숙", "병충해_의심", "판단불가"],
+          "description": "Closed set. A fifth value, typo, or translated variant is a contract violation — AI raises rather than guessing (rule C2.3.1)."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Instances of this class+state in this image. Not deduplicated across frames (rule C2.3.4) — the aggregate is an observation count, not a plant count."
+        },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Null permitted only when state is 판단불가."
+        }
+      }
+    }
+  }
+}
