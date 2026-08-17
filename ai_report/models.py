@@ -1,6 +1,6 @@
 """Pydantic models for every schema at a subsystem boundary.
 
-Source-of-truth order per CLAUDE.md: `contracts/schemas/` beats
+Source-of-truth order per GUIDELINES.md: `contracts/schemas/` beats
 `docs/01-interface-contracts.md` beats everything else.
 
 All four boundary schemas now exist on disk under `contracts/schemas/`
@@ -92,7 +92,7 @@ class CropState(str, Enum):
     Because this is a `str, Enum`, Pydantic rejects any `state` value
     outside these four automatically when validating a `Detection` — that
     rejection is what makes `ingest/vis_watcher.py::scan_once` raise on an
-    unknown VIS state instead of silently coercing it (CLAUDE.md hard rule,
+    unknown VIS state instead of silently coercing it (GUIDELINES.md hard rule,
     error-handling matrix in spec §12).
     """
 
@@ -372,12 +372,12 @@ class PatrolAggregate(BaseModel):
     `contracts/schemas/c3-metadata.schema.json` field-for-field and *is*
     what gets written to `reports/{patrol_id}/metadata.json` (A3's
     `storage/layout.py`). Also what `render/markdown.py`'s Jinja template
-    substitutes every number from (CLAUDE.md hard rule 1: numbers never
+    substitutes every number from (GUIDELINES.md hard rule 1: numbers never
     come from the LLM).
 
     Returned by `pipeline/aggregate.py::aggregate()`. Constructing one
     twice from identical `PatrolSegmentation` input must be byte-identical
-    once serialised (CLAUDE.md hard rule 2) — `aggregate()` has no
+    once serialised (GUIDELINES.md hard rule 2) — `aggregate()` has no
     randomness or wall-clock dependence, so this holds by construction.
     """
 

@@ -1,4 +1,4 @@
-# CLAUDE.md
+# GUIDELINES.md
 
 Read this first. It defines what to build, what **not** to build, and the rules that must hold in every change.
 

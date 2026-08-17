@@ -18,7 +18,7 @@ different, narrower path — see "The regenerate path" below — that only
 works for a patrol whose `payload.json` already exists from some earlier
 run. Today the fresh-patrol chain is only exercised by tests and by manual
 scripts, such as the one used to smoke-test A2–A5 end to end against a
-real running server (with a mocked OpenAI client — CLAUDE.md's API key is
+real running server (with a mocked OpenAI client — GUIDELINES.md's API key is
 never touched by anything in this repo's own test/smoke tooling). See
 "What's not wired up yet" at the bottom.
 

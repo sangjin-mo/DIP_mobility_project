@@ -7,7 +7,7 @@ fact): every field is mandatory (no field has a default), matching spec
 and `additionalProperties: false` at every level."
 
 Deliberately contains **no numeric field anywhere** — every field is a
-Korean string or a list of Korean strings. This is what makes CLAUDE.md
+Korean string or a list of Korean strings. This is what makes GUIDELINES.md
 hard rule 1 ("the LLM never computes numbers") a structural guarantee
 rather than a hope: the model cannot return a number through this schema
 even if the prompt were silent on the matter, because there is nowhere in

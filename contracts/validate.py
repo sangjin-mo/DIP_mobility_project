@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate every schema in contracts/schemas/ and every fixture that claims
 to match one. Run before any commit touching a schema or fixture, per
-CLAUDE.md's working agreement.
+GUIDELINES.md's working agreement.
 
 Usage:
     pip install jsonschema

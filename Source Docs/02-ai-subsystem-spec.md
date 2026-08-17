@@ -348,7 +348,7 @@ Jinja2, `render/templates/report.md.j2`. All figures are template-substituted fr
 {% endif %}
 ```
 
-Note every number in this template comes from `agg`, never from `llm`. That is the rule from `CLAUDE.md` made concrete.
+Note every number in this template comes from `agg`, never from `llm`. That is the rule from `GUIDELINES.md` made concrete.
 
 ## 11. ⑦ Storage
 

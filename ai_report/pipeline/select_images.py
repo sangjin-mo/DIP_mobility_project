@@ -154,7 +154,7 @@ def _resize_image_bytes(src: Path, settings: Settings) -> bytes | None:
     """Resize one image file to `IMAGE_RESIZE_PX` on the long edge, returning JPEG bytes.
 
     Returns `None` (rather than raising) on a missing or undecodable
-    source file — CLAUDE.md's "never fabricate data on missing input"
+    source file — GUIDELINES.md's "never fabricate data on missing input"
     extends to not letting one bad file abort an entire report. Shared by
     `copy_and_resize_images` (writes the bytes to disk) and
     `load_selected_images` (keeps them in memory for the LLM call) so the

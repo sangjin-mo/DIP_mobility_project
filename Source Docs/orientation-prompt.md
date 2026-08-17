@@ -1,10 +1,10 @@
 # Original orientation + A1 implementation prompt
 
-Read CLAUDE.md, then docs/00 through docs/03, before doing anything else.
+Read GUIDELINES.md, then docs/00 through docs/03, before doing anything else.
 
 I own the AI subsystem of a four-team project. The other three subsystems
 (DR/driving, VIS/YOLO, WEB/dashboard) belong to teammates and are listed as
-explicit non-goals in CLAUDE.md. Do not implement them.
+explicit non-goals in GUIDELINES.md. Do not implement them.
 
 We are starting at Phase A1 in docs/03-build-plan.md. Phase A0 (contract
 sign-off) is a human task already in progress — code against the contracts as
@@ -12,7 +12,7 @@ written, but keep every boundary assumption isolated in a Pydantic model.
 
 STEP 1 — orientation. Do not write code yet. Report back with:
   a. Your understanding of the ownership boundary in one paragraph.
-  b. The seven hard rules from CLAUDE.md, restated in your own words.
+  b. The seven hard rules from GUIDELINES.md, restated in your own words.
   c. Any contradiction, ambiguity, or gap you found across the four docs.
      I would rather find doc bugs now than in week three.
   d. A concrete file-by-file plan for A1: which modules, which order,

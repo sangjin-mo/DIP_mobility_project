@@ -1,5 +1,5 @@
 """② Aggregation — spec §6. Pure, deterministic statistics over a
-`PatrolSegmentation`. CLAUDE.md hard rule 1: every number in the eventual
+`PatrolSegmentation`. GUIDELINES.md hard rule 1: every number in the eventual
 report comes from here, never from the LLM. Hard rule 2: `aggregate()` must
 be network-free and produce byte-identical output for identical input —
 true by construction here, since nothing in this module reads the clock,

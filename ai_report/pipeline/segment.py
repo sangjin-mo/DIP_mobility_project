@@ -1,5 +1,5 @@
 """① Zone segmentation — spec §5. The single most correctness-critical
-algorithm in the subsystem (CLAUDE.md hard rule 4): zone boundaries come
+algorithm in the subsystem (GUIDELINES.md hard rule 4): zone boundaries come
 from `ZONE_ENTER` events, never from elapsed time or distance-derived
 guesswork, unless no events exist at all.
 
@@ -131,7 +131,7 @@ def segment_patrol(
     `_build_windows`.
 
     Pure and deterministic: same four arguments always produce the same
-    `PatrolSegmentation` (CLAUDE.md hard rule 2). No I/O — callers are
+    `PatrolSegmentation` (GUIDELINES.md hard rule 2). No I/O — callers are
     responsible for loading `telemetry`/`events`/`analysis` from `Store` first.
     """
     events_sorted = sorted(events, key=lambda e: e.ts_ms)

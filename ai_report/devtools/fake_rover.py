@@ -1,5 +1,5 @@
 """DR emitter stand-in. Every later phase is developed against this, not
-real hardware — see CLAUDE.md and 03-build-plan.md, A1.
+real hardware — see GUIDELINES.md and 03-build-plan.md, A1.
 
 Generates a synthetic patrol (telemetry at 1 Hz, ZONE_ENTER/EMERGENCY_STOP/
 PATROL_START/PATROL_END events) and replays it over real UDP (telemetry)

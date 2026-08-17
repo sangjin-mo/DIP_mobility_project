@@ -1,5 +1,5 @@
 """⑤ LLM call — spec §9. The only stage in this whole subsystem that
-touches the network (CLAUDE.md hard rule 2 / spec §1's architecture
+touches the network (GUIDELINES.md hard rule 2 / spec §1's architecture
 diagram: every other stage is green/deterministic).
 
 `generate_report` never raises and never aborts a report (spec §12's error
@@ -13,7 +13,7 @@ Called by: whatever runs the pipeline for a patrol, immediately after
 `pipeline/payload.py::build_payload` and `pipeline/select_images.py::load_selected_images`
 — currently only `tests/test_llm_client.py`, since production orchestration
 doesn't exist yet. `generate_report` accepts an injected `client` so tests
-never construct a real `AsyncOpenAI` (CLAUDE.md: "No network calls in any test").
+never construct a real `AsyncOpenAI` (GUIDELINES.md: "No network calls in any test").
 """
 
 from __future__ import annotations

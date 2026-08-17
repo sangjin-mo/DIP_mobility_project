@@ -1,6 +1,6 @@
 """VIS emitter stand-in — writes synthetic C2 analysis JSON plus the
 `_COMPLETE` marker, so `ingest/vis_watcher.py` can be exercised without a
-real YOLO pipeline. See CLAUDE.md's ownership boundary: this fakes VIS's
+real YOLO pipeline. See GUIDELINES.md's ownership boundary: this fakes VIS's
 *output*, it does not run any detection model.
 
 Call flow for `python -m ai_report.devtools.fake_vis` (`main`):

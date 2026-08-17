@@ -1,5 +1,5 @@
 """⑥ Markdown rendering — spec §10, ICD §C3.2. Jinja2, never model output
-(CLAUDE.md hard rule 3): the LLM's structured JSON only supplies prose
+(GUIDELINES.md hard rule 3): the LLM's structured JSON only supplies prose
 strings the template drops into fixed slots next to figures that already
 came from `PatrolAggregate`. Every number comes from `PatrolAggregate`
 (hard rule 1) — `LlmReportOutput` (A5's `llm/schema.py`) has no numeric
