@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>농업 순찰 로버 대시보드</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">SMART FARM PATROL</p>
+      <h1>농업 순찰 로버</h1>
+    </div>
+    <div class="connection">
+      <span id="connection-dot" class="dot offline"></span>
+      <span id="connection-label">연결 확인 중</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero-grid">
+      <article class="panel camera-panel">
+        <div class="panel-heading">
+          <h2>실시간 카메라</h2>
+          <span id="camera-status" class="muted">미연결</span>
+        </div>
+        {% if camera_url %}
+        <iframe class="camera-frame" src="{{ camera_url }}" title="로버 카메라"></iframe>
+        {% else %}
+        <div class="camera-placeholder">
+          <span>CAMERA</span>
+          <p><code>DASHBOARD_CAMERA_URL</code> 설정 후 스트림이 표시됩니다.</p>
+        </div>
+        {% endif %}
+      </article>
+
+      <section class="metrics" aria-label="실시간 센서">
+        <article class="metric"><span>현재 구역</span><strong id="zone">—</strong></article>
+        <article class="metric"><span>주행 상태</span><strong id="drive-state">—</strong></article>
+        <article class="metric"><span>속도</span><strong><span id="speed">—</span> m/s</strong></article>
+        <article class="metric"><span>조향</span><strong id="steer">—</strong></article>
+        <article class="metric"><span>장애물 거리</span><strong><span id="ultra">—</span> cm</strong></article>
+        <article class="metric"><span>온도</span><strong><span id="temperature">—</span> ℃</strong></article>
+        <article class="metric"><span>습도</span><strong><span id="humidity">—</span> %</strong></article>
+        <article class="metric"><span>마지막 수신</span><strong id="last-received">—</strong></article>
+      </section>
+    </section>
+
+    <section class="panel route-panel">
+      <div class="panel-heading">
+        <h2>순찰 경로</h2>
+        <span id="patrol-id" class="muted">순찰 대기</span>
+      </div>
+      <div id="route" class="route"><span class="route-empty">구역 정보 대기 중</span></div>
+    </section>
+
+    <section class="bottom-grid">
+      <article class="panel controls-panel">
+        <div class="panel-heading">
+          <h2>로버 제어</h2>
+          <span class="muted">DR 제어 계약 미연결</span>
+        </div>
+        <div class="controls">
+          <button disabled>순찰 시작</button>
+          <button disabled>정상 정지</button>
+          <button class="danger" disabled>긴급 정지</button>
+        </div>
+        <p class="notice">기존 DR 제어 함수가 확인되기 전에는 버튼이 명령을 보내지 않습니다.</p>
+      </article>
+
+      <article class="panel event-panel">
+        <div class="panel-heading"><h2>최근 이벤트</h2></div>
+        <div id="latest-event" class="event-empty">수신된 이벤트 없음</div>
+      </article>
+    </section>
+
+    <section class="panel reports-panel">
+      <div class="panel-heading">
+        <h2>순찰 결과</h2>
+        <button id="refresh-reports" class="secondary">새로고침</button>
+      </div>
+      <div class="report-layout">
+        <div id="report-list" class="report-list"><p class="muted">보고서 조회 중</p></div>
+        <pre id="report-content" class="report-content">순찰 결과를 선택하세요.</pre>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/dashboard.js" defer></script>
+</body>
+</html>
