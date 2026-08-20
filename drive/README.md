@@ -21,8 +21,14 @@ trained line-following model.
 
 ## Dashboard integration added in this repository
 
-`dashboard_control.py` adds a small authenticated control API to the same
-process that owns the DonkeyCar actuators:
+The web control feature is isolated in files added by this project:
+
+- `web_manage.py`: a separate executable entry point which reuses
+  `manage.drive()` without editing `manage.py` or any original config file.
+- `dashboard_control.py`: authenticated command API and heartbeat watchdog.
+- `WebInterface.html`: standalone two-button browser interface.
+
+The command API runs in the same process that owns the DonkeyCar actuators:
 
 - `START`: maps the requested target speed linearly onto a calibrated maximum
   throttle and drives with the configured straight steering value.
@@ -34,35 +40,25 @@ process that owns the DonkeyCar actuators:
 This first version is deliberately straight-driving only. It does not claim to
 follow a greenhouse route without a vision/line-following model.
 
-## Raspberry Pi configuration
+## Raspberry Pi web-control execution
 
-Uncomment and calibrate these values in `myconfig.py`:
+No original drive/config file needs to be edited for the web feature. Set the
+token in the Raspberry Pi process environment and run the new entry point:
 
-```python
-DASHBOARD_CONTROL_ENABLED = True
-DASHBOARD_CONTROL_HOST = "0.0.0.0"
-DASHBOARD_CONTROL_PORT = 9200
-DASHBOARD_CONTROL_TOKEN = "replace-with-a-long-random-secret"
-DASHBOARD_HEARTBEAT_TIMEOUT_S = 1.5
-DASHBOARD_MAX_SPEED_MPS = 0.50
-DASHBOARD_MAX_THROTTLE = 0.20
-DASHBOARD_STRAIGHT_STEERING = 0.0
+```bash
+cd drive
+export DASHBOARD_CONTROL_TOKEN='replace-with-a-long-random-secret'
+python web_manage.py --max-speed 0.50 --max-throttle 0.20
 ```
 
-The token is mandatory when dashboard control is enabled. Configure the same
-value as `DASHBOARD_ROVER_CONTROL_TOKEN` on the dashboard PC.
+`--max-throttle` and `--straight-steering` must be calibrated for the real
+vehicle. Run `python web_manage.py --help` for every available option. Configure
+the same token as `DASHBOARD_ROVER_CONTROL_TOKEN` on the dashboard PC.
 
 The Pi also serves the two-button standalone interface at
 `http://RASPBERRY_PI_IP:9200/` from `WebInterface.html`.
 
-Start the DonkeyCar process from this directory on the Raspberry Pi:
-
-```bash
-cd drive
-python manage.py drive
-```
-
-Then configure the dashboard PC:
+Configure the dashboard PC:
 
 ```dotenv
 DASHBOARD_ROVER_CONTROL_URL=http://RASPBERRY_PI_IP:9200/api/control

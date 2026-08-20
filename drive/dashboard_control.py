@@ -1,9 +1,8 @@
 """Dashboard command input for the DonkeyCar vehicle loop.
 
 This module is intentionally independent of DonkeyCar so its command and
-watchdog behaviour can be tested on a PC. ``DashboardControlPart`` is added as
-a threaded DonkeyCar part by ``manage.py`` and becomes the sole source of
-user-mode steering/throttle while dashboard control is enabled.
+watchdog behaviour can be tested on a PC. ``web_manage.py`` adapts it to the
+existing DonkeyCar vehicle loop without changing the team's original files.
 """
 
 from __future__ import annotations
