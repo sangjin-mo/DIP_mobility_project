@@ -5,6 +5,18 @@ let controlConfigured = false;
 let controlBusy = false;
 let driveHeartbeatActive = false;
 let driveHeartbeatTimer = null;
+let weatherRefreshTimer = null;
+let weatherRefreshIntervalSeconds = 1800;
+
+const weatherIcons = {
+  sunny: "☀️",
+  partly_cloudy: "🌤️",
+  cloudy: "☁️",
+  rain: "🌧️",
+  sleet: "🌨️",
+  snow: "❄️",
+  unknown: "❔",
+};
 
 function valueOrDash(value, digits = null) {
   if (value === null || value === undefined) return "—";
@@ -56,8 +68,6 @@ function updateLive(snapshot) {
   byId("speed").textContent = valueOrDash(packet.drive.speed_mps, 2);
   byId("steer").textContent = steeringLabel(packet.drive.steer);
   byId("ultra").textContent = valueOrDash(packet.drive.ultra_cm);
-  byId("temperature").textContent = valueOrDash(packet.env.temp_c, 1);
-  byId("humidity").textContent = valueOrDash(packet.env.humid_pct, 1);
   byId("last-received").textContent = new Date(packet.ts_ms).toLocaleTimeString("ko-KR");
   renderRoute(packet.zone_id);
 
@@ -93,6 +103,7 @@ async function loadControlStatus() {
     const response = await fetch("/api/status");
     const status = await response.json();
     controlConfigured = Boolean(status.control_configured);
+    scheduleWeatherRefresh(Number(status.weather_refresh_interval_s ?? 1800));
     const defaultSpeed = Number(status.default_target_speed_mps ?? 0.25);
     byId("target-speed").value = String(defaultSpeed);
     byId("target-speed-value").textContent = defaultSpeed.toFixed(2);
@@ -108,6 +119,54 @@ async function loadControlStatus() {
     showControlResult("대시보드 서버의 제어 상태를 확인하지 못했습니다.", "error");
   }
   setControlButtons();
+}
+
+function scheduleWeatherRefresh(intervalSeconds) {
+  if (weatherRefreshTimer !== null) clearInterval(weatherRefreshTimer);
+  weatherRefreshIntervalSeconds = Math.max(60, intervalSeconds);
+  const intervalMs = weatherRefreshIntervalSeconds * 1000;
+  weatherRefreshTimer = setInterval(loadWeather, intervalMs);
+}
+
+async function loadWeather(forceRefresh = false) {
+  const status = byId("weather-status");
+  const refreshButton = byId("refresh-weather");
+  refreshButton.disabled = true;
+  if (forceRefresh) status.textContent = "새 날씨 조회 중";
+  try {
+    const response = await fetch(forceRefresh ? "/api/weather/refresh" : "/api/weather", {
+      method: forceRefresh ? "POST" : "GET",
+    });
+    const weather = await response.json();
+    if (!response.ok) throw new Error(weather.detail || `HTTP ${response.status}`);
+
+    byId("weather-temperature").textContent = valueOrDash(weather.temperature_c, 1);
+    byId("weather-humidity").textContent = valueOrDash(weather.humidity_percent, 0);
+    byId("weather-condition").textContent = weather.weather || "확인 불가";
+    const icon = byId("weather-icon");
+    icon.textContent = weatherIcons[weather.weather_icon] || weatherIcons.unknown;
+    icon.setAttribute("aria-label", weather.weather || "날씨 확인 불가");
+    byId("weather-rain").textContent = weather.is_raining ? "있음" : "없음";
+    byId("weather-precipitation").textContent = valueOrDash(weather.precipitation_mm, 1);
+    byId("weather-wind").textContent = valueOrDash(weather.wind_speed_mps, 1);
+    byId("weather-observed-at").textContent = new Date(weather.observed_at).toLocaleString("ko-KR", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    status.textContent = weather.is_stale ? "갱신 지연" : "정상 수신";
+    status.className = weather.is_stale ? "muted warning" : "muted success-text";
+    byId("weather-source").textContent = weather.is_stale
+      ? `마지막 정상 관측값 표시 중 · ${weather.error || "기상청 API 응답 지연"}`
+      : `${weather.location || "위치 미설정"} · ${weather.source} · ${Math.round(weatherRefreshIntervalSeconds / 60)}분마다 자동 갱신`;
+  } catch (error) {
+    status.textContent = "설정 또는 연결 확인 필요";
+    status.className = "muted warning";
+    byId("weather-source").textContent = error.message;
+  } finally {
+    refreshButton.disabled = false;
+  }
 }
 
 async function sendControl(command) {
@@ -206,6 +265,7 @@ async function loadReports() {
 }
 
 byId("refresh-reports").addEventListener("click", loadReports);
+byId("refresh-weather").addEventListener("click", () => loadWeather(true));
 byId("target-speed").addEventListener("input", (event) => {
   byId("target-speed-value").textContent = Number(event.target.value).toFixed(2);
 });
@@ -214,3 +274,4 @@ byId("stop-drive").addEventListener("click", () => sendControl("stop"));
 connectLiveSocket();
 loadReports();
 loadControlStatus();
+loadWeather();

@@ -14,6 +14,7 @@ class DashboardSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="DASHBOARD_",
+        env_ignore_empty=True,
         extra="ignore",
     )
 
@@ -29,6 +30,16 @@ class DashboardSettings(BaseSettings):
     ROVER_CONTROL_TOKEN: str | None = None
     CONTROL_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
     DEFAULT_TARGET_SPEED_MPS: float = Field(default=0.25, gt=0, le=1.0)
+
+    # KMA Village Forecast API. Both encoded and decoded data.go.kr keys are
+    # accepted. A fixed farm only needs its grid coordinates configured once;
+    # the browser never receives the service key.
+    KMA_SERVICE_KEY: str | None = None
+    KMA_NX: int | None = Field(default=None, gt=0)
+    KMA_NY: int | None = Field(default=None, gt=0)
+    WEATHER_LOCATION_LABEL: str = "대구광역시 수성구"
+    WEATHER_REFRESH_INTERVAL_MINUTES: int = Field(default=30, ge=10, le=60)
+    WEATHER_TIMEOUT_S: float = Field(default=5.0, gt=0, le=20)
 
 
 def get_dashboard_settings() -> DashboardSettings:

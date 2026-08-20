@@ -26,6 +26,8 @@ pipeline are not duplicated here.
 - camera placeholder, enabled by `DASHBOARD_CAMERA_URL`
 - drive status plus start and immediate-stop commands forwarded to a
   separately configured Raspberry Pi control agent
+- KMA ultra-short observation/forecast weather over `/api/weather`, cached so
+  dashboard clients do not call the public API independently
 
 The WebSocket currently polls the AI-owned SQLite file once per second. This is
 deliberate for the first draft: it avoids editing or duplicating
@@ -55,7 +57,36 @@ DASHBOARD_ROVER_CONTROL_URL=http://raspberry-pi.local:9200/api/control
 DASHBOARD_ROVER_CONTROL_TOKEN=replace-with-a-shared-secret
 DASHBOARD_CONTROL_TIMEOUT_S=2.0
 DASHBOARD_DEFAULT_TARGET_SPEED_MPS=0.25
+DASHBOARD_KMA_SERVICE_KEY=service-key-from-data.go.kr
+DASHBOARD_KMA_NX=89
+DASHBOARD_KMA_NY=90
+DASHBOARD_WEATHER_LOCATION_LABEL=대구광역시 수성구
+DASHBOARD_WEATHER_REFRESH_INTERVAL_MINUTES=30
 ```
+
+## KMA weather setup
+
+The weather panel combines two endpoints from the KMA Village Forecast API:
+
+- `getUltraSrtNcst`: outside temperature, humidity, one-hour precipitation,
+  precipitation type, and wind speed
+- `getUltraSrtFcst`: the nearest sky condition (`맑음`, `구름 많음`, `흐림`)
+
+Apply for `기상청_단기예보 조회서비스` on data.go.kr and put either the
+encoded or decoded general service key in the local `.env`. The service
+normalises the key before sending it. Convert the fixed farm location to KMA
+grid coordinates once and set `DASHBOARD_KMA_NX` and `DASHBOARD_KMA_NY`.
+Never commit the real `.env` or service key.
+
+The dashboard fetches `/api/weather` immediately and then at the configured
+interval. The server applies the same TTL cache, handles KST base dates/times,
+and returns the last successful observation with `is_stale=true` if KMA is
+temporarily unavailable. These values describe the outside representative AWS
+observation for the forecast grid, not conditions inside a greenhouse.
+
+The weather card maps KMA precipitation and sky states to a matching icon. Its
+`새로고침` button calls `POST /api/weather/refresh`, which deliberately bypasses
+the TTL cache and requests a fresh KMA response immediately.
 
 ## Drive control contract
 

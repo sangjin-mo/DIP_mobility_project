@@ -91,3 +91,81 @@ def test_control_api_forwards_validated_commands(tmp_path):
     assert response.status_code == 200
     assert response.json()["rover"]["state"] == "RUNNING"
     assert send.call_args.args[1:] == (0.3,)
+
+
+def test_weather_api_is_disabled_until_kma_settings_are_configured(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(KMA_SERVICE_KEY=None, KMA_NX=None, KMA_NY=None),
+    )
+
+    with TestClient(app) as client:
+        status = client.get("/api/status").json()
+        response = client.get("/api/weather")
+
+    assert status["weather_configured"] is False
+    assert response.status_code == 503
+    assert "DASHBOARD_KMA_SERVICE_KEY" in response.json()["detail"]
+
+
+def test_weather_api_returns_normalised_kma_data(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(KMA_SERVICE_KEY="key", KMA_NX=60, KMA_NY=127),
+    )
+    weather = {
+        "configured": True,
+        "temperature_c": 27.3,
+        "humidity_percent": 68,
+        "weather": "맑음",
+        "weather_icon": "sunny",
+        "is_raining": False,
+        "precipitation_mm": 0,
+        "wind_speed_mps": 2.1,
+        "observed_at": "2026-08-20T14:00:00+09:00",
+        "fetched_at": "2026-08-20T14:20:00+09:00",
+        "source": "기상청 초단기실황/예보",
+        "grid": {"nx": 60, "ny": 127},
+        "is_stale": False,
+    }
+
+    with (
+        patch("web_dashboard.app.KmaWeatherService.get", return_value=weather),
+        TestClient(app) as client,
+    ):
+        status = client.get("/api/status").json()
+        response = client.get("/api/weather")
+
+    assert status["weather_configured"] is True
+    assert status["weather_refresh_interval_s"] == 1800
+    assert response.status_code == 200
+    assert response.json()["temperature_c"] == 27.3
+
+
+def test_weather_refresh_api_bypasses_server_cache(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(KMA_SERVICE_KEY="key", KMA_NX=89, KMA_NY=90),
+    )
+    weather = {"temperature_c": 28.0, "weather": "맑음", "weather_icon": "sunny"}
+
+    with (
+        patch("web_dashboard.app.KmaWeatherService.get", return_value=weather) as get_weather,
+        TestClient(app) as client,
+    ):
+        response = client.post("/api/weather/refresh")
+
+    assert response.status_code == 200
+    get_weather.assert_called_once_with(True)

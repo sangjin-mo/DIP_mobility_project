@@ -56,7 +56,20 @@ main { padding-bottom: 48px; }
 .metric strong { font-size: 20px; }
 .metric strong span { display: inline; margin: 0; color: inherit; font-size: inherit; }
 
-.route-panel, .bottom-grid, .reports-panel { margin-top: 16px; }
+.weather-panel, .route-panel, .bottom-grid, .reports-panel { margin-top: 16px; }
+.weather-panel .panel-heading > div { display: grid; gap: 4px; }
+.weather-actions { display: flex !important; grid-auto-flow: column; align-items: center; gap: 10px !important; }
+.weather-grid { display: grid; grid-template-columns: 1.25fr repeat(5, 1fr); gap: 10px; }
+.weather-primary, .weather-item { min-height: 92px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
+.weather-primary { display: flex; align-items: center; gap: 12px; }
+.weather-primary > div { display: grid; gap: 5px; }
+.weather-icon { flex: 0 0 auto; font-size: 38px; line-height: 1; filter: drop-shadow(0 3px 7px rgba(0, 0, 0, .22)); }
+.weather-primary strong { color: var(--green); font-size: 30px; }
+.weather-primary > span, .weather-item > span { color: var(--muted); font-size: 13px; }
+.weather-item { display: grid; align-content: center; gap: 10px; }
+.weather-item strong { font-size: 17px; }
+.success-text { color: var(--green); }
+.warning { color: var(--amber); }
 .route { display: flex; align-items: center; min-height: 74px; overflow-x: auto; padding: 8px; }
 .route-node { flex: 0 0 auto; display: grid; place-items: center; min-width: 80px; height: 44px; border: 1px solid var(--line); border-radius: 22px; background: var(--panel-2); }
 .route-node.current { color: #062315; background: var(--green); border-color: var(--green); font-weight: 700; }
@@ -85,11 +98,13 @@ button.secondary { padding: 7px 11px; background: transparent; }
 
 @media (max-width: 820px) {
   .hero-grid, .bottom-grid, .report-layout { grid-template-columns: 1fr; }
+  .weather-grid { grid-template-columns: repeat(2, 1fr); }
   .camera-frame, .camera-placeholder { min-height: 250px; }
 }
 
 @media (max-width: 480px) {
   .topbar { align-items: flex-start; }
   .metrics { grid-template-columns: 1fr; }
+  .weather-grid { grid-template-columns: 1fr; }
   .controls { grid-template-columns: 1fr; }
 }

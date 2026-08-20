@@ -35,16 +35,42 @@
         {% endif %}
       </article>
 
-      <section class="metrics" aria-label="실시간 센서">
+      <section class="metrics" aria-label="실시간 주행정보">
         <article class="metric"><span>현재 구역</span><strong id="zone">—</strong></article>
         <article class="metric"><span>주행 상태</span><strong id="drive-state">—</strong></article>
         <article class="metric"><span>속도</span><strong><span id="speed">—</span> m/s</strong></article>
         <article class="metric"><span>조향</span><strong id="steer">—</strong></article>
         <article class="metric"><span>장애물 거리</span><strong><span id="ultra">—</span> cm</strong></article>
-        <article class="metric"><span>온도</span><strong><span id="temperature">—</span> ℃</strong></article>
-        <article class="metric"><span>습도</span><strong><span id="humidity">—</span> %</strong></article>
         <article class="metric"><span>마지막 수신</span><strong id="last-received">—</strong></article>
       </section>
+    </section>
+
+    <section class="panel weather-panel" aria-label="외부 기상정보">
+      <div class="panel-heading">
+        <div>
+          <h2>외부 기상정보</h2>
+          <span class="muted">기상청 초단기실황·예보</span>
+        </div>
+        <div class="weather-actions">
+          <span id="weather-status" class="muted">기상청 API 확인 중</span>
+          <button id="refresh-weather" class="secondary" type="button">새로고침</button>
+        </div>
+      </div>
+      <div class="weather-grid">
+        <article class="weather-primary">
+          <span id="weather-icon" class="weather-icon" role="img" aria-label="날씨 확인 중">❔</span>
+          <div>
+            <strong><span id="weather-temperature">—</span> ℃</strong>
+            <span id="weather-condition">확인 중</span>
+          </div>
+        </article>
+        <article class="weather-item"><span>외부 습도</span><strong><span id="weather-humidity">—</span> %</strong></article>
+        <article class="weather-item"><span>강우 여부</span><strong id="weather-rain">—</strong></article>
+        <article class="weather-item"><span>1시간 강수량</span><strong><span id="weather-precipitation">—</span> mm</strong></article>
+        <article class="weather-item"><span>풍속</span><strong><span id="weather-wind">—</span> m/s</strong></article>
+        <article class="weather-item"><span>관측 기준</span><strong id="weather-observed-at">—</strong></article>
+      </div>
+      <p id="weather-source" class="notice">외부 관측값이며 비닐하우스 내부 센서값이 아닙니다.</p>
     </section>
 
     <section class="panel route-panel">

@@ -29,6 +29,7 @@ from web_dashboard.services.report_service import (
     ReportNotFoundError,
     ReportService,
 )
+from web_dashboard.services.weather_service import KmaWeatherService, WeatherUnavailableError
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 
@@ -49,6 +50,14 @@ def create_app(
         web_config.ROVER_CONTROL_URL,
         timeout_s=web_config.CONTROL_TIMEOUT_S,
         token=web_config.ROVER_CONTROL_TOKEN,
+    )
+    weather = KmaWeatherService(
+        web_config.KMA_SERVICE_KEY,
+        web_config.KMA_NX,
+        web_config.KMA_NY,
+        location_label=web_config.WEATHER_LOCATION_LABEL,
+        refresh_interval_minutes=web_config.WEATHER_REFRESH_INTERVAL_MINUTES,
+        timeout_s=web_config.WEATHER_TIMEOUT_S,
     )
 
     templates = Environment(
@@ -73,8 +82,24 @@ def create_app(
             "database_exists": ai_config.sqlite_path.is_file(),
             "camera_configured": bool(web_config.CAMERA_URL),
             "control_configured": control.configured,
+            "weather_configured": weather.configured,
+            "weather_refresh_interval_s": web_config.WEATHER_REFRESH_INTERVAL_MINUTES * 60,
             "default_target_speed_mps": web_config.DEFAULT_TARGET_SPEED_MPS,
         }
+
+    @app.get("/api/weather")
+    async def current_weather() -> dict:
+        try:
+            return await asyncio.to_thread(weather.get)
+        except WeatherUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/weather/refresh")
+    async def refresh_weather() -> dict:
+        try:
+            return await asyncio.to_thread(weather.get, True)
+        except WeatherUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/live/latest")
     async def live_latest() -> dict:
