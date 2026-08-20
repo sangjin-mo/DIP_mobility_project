@@ -1,0 +1,15 @@
+{
+  "image_id": "20260813_1430_z1_001",
+  "patrol_id": "20260813_1430",
+  "captured_at_ms": 120000,
+  "image_path": "images/20260813_1430/z1_001.jpg",
+  "image_quality": 0.88,
+  "detections": [
+    {
+      "class": "tomato",
+      "state": "정상",
+      "count": 3,
+      "confidence": 0.94
+    }
+  ]
+}
