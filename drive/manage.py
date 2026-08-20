@@ -152,6 +152,13 @@ def drive(cfg, model_path=None, use_joystick=False, model_type=None, camera_type
         if not cfg.DASHBOARD_CONTROL_TOKEN:
             raise ValueError('DASHBOARD_CONTROL_TOKEN is required when dashboard control is enabled')
 
+        use_pilot_steering = getattr(cfg, 'DASHBOARD_USE_PILOT_STEERING', False)
+        if use_pilot_steering and not model_path:
+            raise ValueError(
+                'DASHBOARD_USE_PILOT_STEERING requires a trained model: '
+                'start with manage.py drive --model=<path to .h5>'
+            )
+
         dashboard_control = DashboardControlPart(
             host=cfg.DASHBOARD_CONTROL_HOST,
             port=cfg.DASHBOARD_CONTROL_PORT,
@@ -160,6 +167,7 @@ def drive(cfg, model_path=None, use_joystick=False, model_type=None, camera_type
             max_speed_mps=cfg.DASHBOARD_MAX_SPEED_MPS,
             max_throttle=cfg.DASHBOARD_MAX_THROTTLE,
             straight_steering=cfg.DASHBOARD_STRAIGHT_STEERING,
+            use_pilot_steering=use_pilot_steering,
         )
         V.add(
             dashboard_control,

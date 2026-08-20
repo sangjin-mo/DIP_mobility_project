@@ -31,8 +31,18 @@ process that owns the DonkeyCar actuators:
 - `HEARTBEAT`: keeps a running command alive. Missing heartbeats force a local
   stop even if the PC, browser, or Wi-Fi fails.
 
-This first version is deliberately straight-driving only. It does not claim to
-follow a greenhouse route without a vision/line-following model.
+By default this drives straight only. Set `DASHBOARD_USE_PILOT_STEERING = True`
+in `myconfig.py` to hand steering to a trained pilot model instead (DonkeyCar's
+`local_angle` mode): the dashboard still owns throttle (speed-capped), STOP,
+and the heartbeat watchdog; the model only supplies steering while RUNNING.
+This requires starting the process with a model:
+
+```bash
+python manage.py drive --model=models/mypilot.h5
+```
+
+If `DASHBOARD_USE_PILOT_STEERING` is enabled without `--model`, `manage.py`
+raises an error at startup rather than silently driving straight.
 
 ## Raspberry Pi configuration
 
@@ -79,6 +89,11 @@ DASHBOARD_ROVER_CONTROL_TOKEN=replace-with-a-long-random-secret
 5. Disconnect Wi-Fi while running and confirm the heartbeat watchdog returns
    throttle to zero.
 6. Only then perform a clear-floor, low-speed ground test.
+
+If enabling `DASHBOARD_USE_PILOT_STEERING`, repeat steps 1, 3, 5, and 6 again
+with the model loaded before a track test: pilot-supplied steering has not
+been through the same wheels-raised verification as straight driving, and
+`local_angle` mode still relies on the same STOP/heartbeat path for safety.
 
 `target_speed_mps` is currently a calibrated command, not encoder-measured
 speed. The uploaded PiRacer code has no wheel-speed feedback, so the dashboard

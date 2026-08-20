@@ -15,7 +15,9 @@ class FakeClock:
         return self.now
 
 
-def make_control(clock: FakeClock | None = None) -> DashboardControlPart:
+def make_control(
+    clock: FakeClock | None = None, use_pilot_steering: bool = False
+) -> DashboardControlPart:
     return DashboardControlPart(
         host="127.0.0.1",
         port=0,
@@ -24,6 +26,7 @@ def make_control(clock: FakeClock | None = None) -> DashboardControlPart:
         max_speed_mps=0.5,
         max_throttle=0.2,
         straight_steering=0.0,
+        use_pilot_steering=use_pilot_steering,
         clock=clock or FakeClock(),
     )
 
@@ -45,6 +48,26 @@ def test_start_maps_target_speed_to_bounded_throttle():
 
     assert result["state"] == "RUNNING"
     assert control.run_threaded(None, None, None) == (0.0, 0.1, "user")
+
+
+def test_running_defaults_to_user_mode_straight_driving():
+    control = make_control()
+    control.apply_command(command("START", target_speed_mps=0.25))
+
+    assert control.run_threaded(None, None, None) == (0.0, 0.1, "user")
+
+
+def test_pilot_steering_uses_local_angle_mode_when_running():
+    control = make_control(use_pilot_steering=True)
+    control.apply_command(command("START", target_speed_mps=0.25))
+
+    assert control.run_threaded(None, None, None) == (0.0, 0.1, "local_angle")
+
+
+def test_pilot_steering_still_forces_user_mode_when_stopped():
+    control = make_control(use_pilot_steering=True)
+
+    assert control.run_threaded(0.8, 0.9, "local") == (0.0, 0.0, "user")
 
 
 def test_missing_heartbeat_stops_locally():

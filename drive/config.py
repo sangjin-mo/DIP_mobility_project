@@ -35,6 +35,10 @@ DASHBOARD_HEARTBEAT_TIMEOUT_S = 1.5
 DASHBOARD_MAX_SPEED_MPS = 0.50
 DASHBOARD_MAX_THROTTLE = 0.20
 DASHBOARD_STRAIGHT_STEERING = 0.0
+# When True, START hands steering to the trained pilot model (DonkeyCar's
+# 'local_angle' mode) instead of driving straight. Requires manage.py to be
+# started with --model=<path to .h5>; throttle is still dashboard-capped.
+DASHBOARD_USE_PILOT_STEERING = False
 
 #CAMERA
 CAMERA_TYPE = "PICAM"   # (PICAM|WEBCAM|CVCAM|CSIC|V4L|MOCK)

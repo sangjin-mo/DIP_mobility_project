@@ -70,12 +70,21 @@
       message.className = kind;
     }
 
+    function generateCommandId() {
+      // crypto.randomUUID() only exists in secure contexts (HTTPS/localhost).
+      // The Pi is served over plain http://<ip>, so it is unavailable here.
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+      }
+      return `cmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
+
     async function command(name) {
       start.disabled = true;
       stop.disabled = true;
       if (name === "STOP") stopHeartbeat();
       const payload = {
-        command_id: crypto.randomUUID(),
+        command_id: generateCommandId(),
         command: name,
         sent_at_ms: Date.now()
       };
@@ -107,16 +116,30 @@
             method: "POST",
             headers: headers(),
             body: JSON.stringify({
-              command_id: crypto.randomUUID(),
+              command_id: generateCommandId(),
               command: "HEARTBEAT",
               sent_at_ms: Date.now()
             })
           });
-          if (!response.ok) throw new Error();
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const result = await response.json();
+          state.textContent = result.state;
+          if (result.state !== "RUNNING") {
+            // Vehicle is no longer running (watchdog timeout elsewhere, or
+            // STOP issued from another client) - nothing left to keep alive.
+            stopHeartbeat();
+            setMessage("차량이 정지 상태입니다.", "error");
+          } else {
+            setMessage("정지는 throttle을 즉시 0으로 만듭니다.", "");
+          }
         } catch (_) {
-          stopHeartbeat();
-          state.textContent = "STOPPED 예상";
-          setMessage("통신이 끊겨 차량 watchdog이 자동 정지합니다.", "error");
+          // A single failed ping does not mean the vehicle has stopped: the
+          // server-side watchdog only stops it after DASHBOARD_HEARTBEAT_TIMEOUT_S
+          // (1.5s) of missed heartbeats, several ticks away at this 500ms
+          // interval. Keep retrying instead of giving up on one hiccup; the
+          // next successful response will report the vehicle's real state.
+          state.textContent = "연결 불안정";
+          setMessage("통신 재시도 중... 계속 끊기면 watchdog이 자동 정지합니다.", "error");
         }
       }, 500);
     }
