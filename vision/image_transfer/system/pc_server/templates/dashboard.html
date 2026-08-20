@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>VIS 통합 서버 — 이미지 저장·전송 관리</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+    background: #f4f5f7;
+    color: #1f2933;
+  }
+  header {
+    background: #1f2933;
+    color: #fff;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .badge { font-size: 12px; color: #cbd2d9; }
+
+  .stats {
+    display: flex;
+    gap: 16px;
+    padding: 24px 24px 0;
+  }
+  .stat-card {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #e4e7eb;
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .stat-card .label { font-size: 12px; color: #7b8794; }
+  .stat-card .value { font-size: 26px; font-weight: bold; margin-top: 6px; }
+
+  .actions {
+    margin: 16px 24px;
+    background: #fff;
+    border: 1px solid #e4e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  button {
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    color: #fff;
+    cursor: pointer;
+  }
+  button.primary { background: #2f6feb; }
+  button.danger { background: #c0392b; }
+  button.disabled { background: #9aa5b1; cursor: not-allowed; }
+  #status-msg { margin-left: auto; font-size: 12px; color: #52606d; }
+
+  .grid-heading {
+    margin: 24px 24px 8px;
+    font-size: 14px;
+    font-weight: bold;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin: 0 24px 24px;
+  }
+  .thumb {
+    background: #fff;
+    border: 1px solid #e4e7eb;
+    border-radius: 6px;
+    padding: 8px;
+    position: relative;
+  }
+  .thumb img {
+    width: 100%;
+    height: 100px;
+    object-fit: cover;
+    border-radius: 4px;
+    background: #d9dde3;
+    display: block;
+  }
+  .thumb .checkbox {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+  }
+  .thumb .filename {
+    font-size: 10px;
+    color: #52606d;
+    margin-top: 6px;
+    word-break: break-all;
+  }
+  .empty {
+    margin: 40px 24px;
+    color: #9aa5b1;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VIS 통합 서버 — 이미지 저장·전송 관리</h1>
+  <span class="badge">features/image_transfer/system/pc_server</span>
+</header>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="label">PC 수신 완료</div>
+    <div class="value">{{ received_count }}장</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">라즈베리파이 로컬 상태</div>
+    <div class="value" style="font-size: 14px; color: #7b8794;">"전송 요청"으로 확인</div>
+  </div>
+</div>
+
+<div class="actions">
+  <button class="primary" onclick="requestTransfer()">전송 요청</button>
+  <button class="danger" onclick="deleteSelected()">선택 항목 삭제 (PC)</button>
+  <button class="danger" onclick="deleteAllLocal()">라즈베리파이 로컬 저장소 전체 삭제</button>
+  <button class="disabled" disabled title="향후 AI 분석 기능이 이 자리에 연결됩니다">분석 시작 (준비중)</button>
+  <span id="status-msg"></span>
+</div>
+
+<div class="grid-heading" style="display: flex; align-items: center; gap: 8px;">
+  <label style="font-weight: normal; font-size: 12px; color: #52606d; display: flex; align-items: center; gap: 4px;">
+    <input type="checkbox" id="select-all-checkbox" onchange="toggleSelectAll(this)">
+    전체 선택
+  </label>
+  <span>수신된 이미지 ({{ config_dir }})</span>
+</div>
+
+{% if images %}
+<div class="grid" id="image-grid">
+  {% for img in images %}
+  <div class="thumb" data-relpath="{{ img.rel_path }}">
+    <input class="checkbox" type="checkbox" value="{{ img.rel_path }}">
+    <img src="{{ img.url }}" alt="{{ img.filename }}" loading="lazy">
+    <div class="filename">{{ img.filename }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty" id="empty-msg">아직 수신된 이미지가 없습니다. "전송 요청" 버튼을 눌러 라즈베리파이의 이미지를 가져오세요.</div>
+{% endif %}
+
+<script>
+function setStatus(msg) {
+  document.getElementById('status-msg').textContent = msg;
+}
+
+async function requestTransfer() {
+  setStatus('전송 요청 중... (완료까지 대기)');
+  try {
+    const res = await fetch('/control/request-transfer', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus('전송 실패: ' + (data.reason || res.status));
+      return;
+    }
+    setStatus(`전송 완료 — 요청 ${data.requested}장 / 성공 ${data.success}장 / 실패 ${data.failed}장`);
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    setStatus('전송 요청 실패: ' + e);
+  }
+}
+
+function toggleSelectAll(source) {
+  document.querySelectorAll('.checkbox').forEach(el => { el.checked = source.checked; });
+}
+
+async function deleteSelected() {
+  const checked = Array.from(document.querySelectorAll('.checkbox:checked')).map(el => el.value);
+  if (checked.length === 0) {
+    setStatus('삭제할 이미지를 먼저 선택하세요.');
+    return;
+  }
+  if (!confirm(`선택한 ${checked.length}장을 PC 보관소(received/)에서 삭제할까요?\n(라즈베리파이 로컬 저장소는 그대로 유지됩니다)`)) {
+    return;
+  }
+  setStatus('삭제 요청 중...');
+  try {
+    const res = await fetch('/images/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: checked }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus('삭제 실패: ' + (data.reason || res.status));
+      return;
+    }
+    // 삭제 성공한 항목은 새로고침 없이 화면에서 바로 제거
+    data.deleted.forEach(relPath => {
+      const el = document.querySelector(`.thumb[data-relpath="${CSS.escape(relPath)}"]`);
+      if (el) el.remove();
+    });
+    document.getElementById('select-all-checkbox').checked = false;
+    const grid = document.getElementById('image-grid');
+    if (grid && grid.children.length === 0) {
+      grid.insertAdjacentHTML('afterend', '<div class="empty" id="empty-msg">아직 수신된 이미지가 없습니다. "전송 요청" 버튼을 눌러 라즈베리파이의 이미지를 가져오세요.</div>');
+      grid.remove();
+    }
+    setStatus(`PC에서 삭제 완료 ${data.deleted.length}장 / 실패 ${data.rejected.length}장`);
+  } catch (e) {
+    setStatus('삭제 요청 실패: ' + e);
+  }
+}
+
+async function deleteAllLocal() {
+  if (!confirm('라즈베리파이 로컬 저장소의 전송 완료된 이미지를 전부 삭제할까요?\n(PC에 보관된 이미지는 영향받지 않습니다)')) {
+    return;
+  }
+  setStatus('라즈베리파이 로컬 저장소 삭제 요청 중...');
+  try {
+    const res = await fetch('/control/delete-all-local', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus('삭제 실패: ' + (data.reason || res.status));
+      return;
+    }
+    setStatus(`라즈베리파이 로컬 삭제 완료 ${data.deleted.length}장 (미전송이라 보존됨: ${data.pending_kept}장)`);
+  } catch (e) {
+    setStatus('삭제 요청 실패: ' + e);
+  }
+}
+</script>
+
+</body>
+</html>

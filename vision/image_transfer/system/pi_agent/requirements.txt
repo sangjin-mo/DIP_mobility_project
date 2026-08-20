@@ -1,0 +1,7 @@
+# 라즈베리파이(pi_agent)에서 필요한 패키지
+# opencv-python은 pip 소스 빌드가 느리므로, 라즈베리파이에서는
+# `sudo apt-get install -y python3-opencv`로 설치하는 것을 권장 (design/README.md 참고)
+fastapi
+uvicorn
+requests
+pydantic
