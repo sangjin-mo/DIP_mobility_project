@@ -64,12 +64,17 @@ main { padding-bottom: 48px; }
 .route-empty { color: var(--muted); }
 
 .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.controls { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 8px; }
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.speed-control { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 7px 14px; margin-bottom: 14px; color: var(--muted); font-size: 13px; }
+.speed-control strong { justify-self: end; color: var(--text); font-size: 16px; }
+.speed-control input { grid-column: 1 / -1; width: 100%; accent-color: var(--green); }
 button { padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: #244235; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 button.danger { background: #6f2929; }
 button.secondary { padding: 7px 11px; background: transparent; }
 .notice, .event-empty { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+.notice.success { color: var(--green); }
+.notice.error { color: var(--red); }
 
 .report-layout { display: grid; grid-template-columns: 280px 1fr; gap: 14px; }
 .report-list { display: grid; align-content: start; gap: 8px; }

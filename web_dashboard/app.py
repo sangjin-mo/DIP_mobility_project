@@ -13,9 +13,16 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pydantic import BaseModel, Field
 
 from ai_report.config import Settings, get_settings
 from web_dashboard.config import DashboardSettings, get_dashboard_settings
+from web_dashboard.services.control_service import (
+    ControlCommandError,
+    ControlUnavailableError,
+    DriveCommand,
+    RoverControlService,
+)
 from web_dashboard.services.live_service import LiveStateService
 from web_dashboard.services.report_service import (
     InvalidReportError,
@@ -26,6 +33,10 @@ from web_dashboard.services.report_service import (
 PACKAGE_ROOT = Path(__file__).resolve().parent
 
 
+class StartRequest(BaseModel):
+    target_speed_mps: float | None = Field(default=None, gt=0, le=1.0)
+
+
 def create_app(
     ai_settings: Settings | None = None,
     dashboard_settings: DashboardSettings | None = None,
@@ -34,6 +45,11 @@ def create_app(
     web_config = dashboard_settings or get_dashboard_settings()
     reports = ReportService(ai_config.REPORT_ROOT)
     live = LiveStateService(ai_config.sqlite_path, web_config.TELEMETRY_STALE_AFTER_S)
+    control = RoverControlService(
+        web_config.ROVER_CONTROL_URL,
+        timeout_s=web_config.CONTROL_TIMEOUT_S,
+        token=web_config.ROVER_CONTROL_TOKEN,
+    )
 
     templates = Environment(
         loader=FileSystemLoader(PACKAGE_ROOT / "templates"),
@@ -56,7 +72,8 @@ def create_app(
             "report_root": str(ai_config.REPORT_ROOT),
             "database_exists": ai_config.sqlite_path.is_file(),
             "camera_configured": bool(web_config.CAMERA_URL),
-            "control_connected": False,
+            "control_configured": control.configured,
+            "default_target_speed_mps": web_config.DEFAULT_TARGET_SPEED_MPS,
         }
 
     @app.get("/api/live/latest")
@@ -72,6 +89,19 @@ def create_app(
                 await asyncio.sleep(web_config.LIVE_POLL_INTERVAL_S)
         except WebSocketDisconnect:
             return
+
+    @app.post("/api/control/start")
+    async def start_rover(request: StartRequest) -> dict:
+        speed = request.target_speed_mps or web_config.DEFAULT_TARGET_SPEED_MPS
+        return await _control_call(control, DriveCommand.START, speed)
+
+    @app.post("/api/control/stop")
+    async def stop_rover() -> dict:
+        return await _control_call(control, DriveCommand.STOP)
+
+    @app.post("/api/control/heartbeat")
+    async def heartbeat_rover() -> dict:
+        return await _control_call(control, DriveCommand.HEARTBEAT)
 
     @app.get("/api/patrols")
     async def patrols() -> list[dict]:
@@ -101,3 +131,16 @@ async def _service_call(function, *args):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ReportNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def _control_call(
+    control: RoverControlService,
+    command: DriveCommand,
+    target_speed_mps: float | None = None,
+) -> dict:
+    try:
+        return await asyncio.to_thread(control.send, command, target_speed_mps)
+    except ControlUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ControlCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -142,6 +142,32 @@ def drive(cfg, model_path=None, use_joystick=False, model_type=None, camera_type
           outputs=['user/angle', 'user/throttle', 'user/mode', 'recording'],
           threaded=True)
 
+    # Optional command input from the project dashboard. When enabled, this
+    # part deliberately overrides LocalWebController's user command and
+    # forces user mode. The part owns a heartbeat watchdog, so losing the
+    # browser/dashboard/API path always resolves to throttle=0 locally.
+    if getattr(cfg, 'DASHBOARD_CONTROL_ENABLED', False):
+        from dashboard_control import DashboardControlPart
+
+        if not cfg.DASHBOARD_CONTROL_TOKEN:
+            raise ValueError('DASHBOARD_CONTROL_TOKEN is required when dashboard control is enabled')
+
+        dashboard_control = DashboardControlPart(
+            host=cfg.DASHBOARD_CONTROL_HOST,
+            port=cfg.DASHBOARD_CONTROL_PORT,
+            token=cfg.DASHBOARD_CONTROL_TOKEN,
+            heartbeat_timeout_s=cfg.DASHBOARD_HEARTBEAT_TIMEOUT_S,
+            max_speed_mps=cfg.DASHBOARD_MAX_SPEED_MPS,
+            max_throttle=cfg.DASHBOARD_MAX_THROTTLE,
+            straight_steering=cfg.DASHBOARD_STRAIGHT_STEERING,
+        )
+        V.add(
+            dashboard_control,
+            inputs=['user/angle', 'user/throttle', 'user/mode'],
+            outputs=['user/angle', 'user/throttle', 'user/mode'],
+            threaded=True,
+        )
+
     #this throttle filter will allow one tap back for esc reverse
     th_filter = ThrottleFilter()
     V.add(th_filter, inputs=['user/throttle'], outputs=['user/throttle'])

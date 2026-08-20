@@ -18,6 +18,16 @@
 # #VEHICLE
 # DRIVE_LOOP_HZ = 20      # the vehicle loop will pause if faster than this speed.
 # MAX_LOOPS = None        # the vehicle loop can abort after this many iterations, when given a positive integer.
+
+# Project dashboard control. Uncomment and calibrate on the real PiRacer.
+# DASHBOARD_CONTROL_ENABLED = True
+# DASHBOARD_CONTROL_HOST = "0.0.0.0"
+# DASHBOARD_CONTROL_PORT = 9200
+# DASHBOARD_CONTROL_TOKEN = "replace-with-a-shared-secret"
+# DASHBOARD_HEARTBEAT_TIMEOUT_S = 1.5
+# DASHBOARD_MAX_SPEED_MPS = 0.50
+# DASHBOARD_MAX_THROTTLE = 0.20
+# DASHBOARD_STRAIGHT_STEERING = 0.0
 # 
 # #CAMERA
 # CAMERA_TYPE = "PICAM"   # (PICAM|WEBCAM|CVCAM|CSIC|V4L|MOCK)

@@ -1,6 +1,10 @@
 const byId = (id) => document.getElementById(id);
 
 let knownZoneIds = [];
+let controlConfigured = false;
+let controlBusy = false;
+let driveHeartbeatActive = false;
+let driveHeartbeatTimer = null;
 
 function valueOrDash(value, digits = null) {
   if (value === null || value === undefined) return "—";
@@ -71,6 +75,97 @@ function connectLiveSocket() {
   socket.onerror = () => socket.close();
 }
 
+function setControlButtons() {
+  const enabled = controlConfigured && !controlBusy;
+  byId("start-drive").disabled = !enabled;
+  byId("stop-drive").disabled = !enabled;
+  byId("target-speed").disabled = !enabled;
+}
+
+function showControlResult(message, kind = "") {
+  const result = byId("control-result");
+  result.textContent = message;
+  result.className = `notice ${kind}`.trim();
+}
+
+async function loadControlStatus() {
+  try {
+    const response = await fetch("/api/status");
+    const status = await response.json();
+    controlConfigured = Boolean(status.control_configured);
+    const defaultSpeed = Number(status.default_target_speed_mps ?? 0.25);
+    byId("target-speed").value = String(defaultSpeed);
+    byId("target-speed-value").textContent = defaultSpeed.toFixed(2);
+    byId("control-status").textContent = controlConfigured ? "제어 API 설정됨" : "제어 API 미설정";
+    showControlResult(
+      controlConfigured
+        ? "차량 명령을 보낼 수 있습니다. 실제 상태는 텔레메트리로 확인하세요."
+        : "DASHBOARD_ROVER_CONTROL_URL을 설정하면 제어 버튼이 활성화됩니다."
+    );
+  } catch (_) {
+    controlConfigured = false;
+    byId("control-status").textContent = "제어 상태 확인 실패";
+    showControlResult("대시보드 서버의 제어 상태를 확인하지 못했습니다.", "error");
+  }
+  setControlButtons();
+}
+
+async function sendControl(command) {
+  if (command !== "start") stopDriveHeartbeat();
+  controlBusy = true;
+  setControlButtons();
+  showControlResult("차량 응답을 기다리는 중입니다.");
+  const options = { method: "POST", headers: { "Content-Type": "application/json" } };
+  if (command === "start") {
+    options.body = JSON.stringify({ target_speed_mps: Number(byId("target-speed").value) });
+  }
+  try {
+    const response = await fetch(`/api/control/${command}`, options);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    const roverState = result.rover?.state ? ` · 차량 상태 ${result.rover.state}` : "";
+    showControlResult(
+      `${result.command} 명령이 차량에서 승인되었습니다${roverState}.`,
+      "success"
+    );
+    if (result.rover?.state) byId("drive-state").textContent = result.rover.state;
+    if (command === "start") startDriveHeartbeat();
+  } catch (error) {
+    showControlResult(`명령 실패: ${error.message}`, "error");
+  } finally {
+    controlBusy = false;
+    setControlButtons();
+  }
+}
+
+function startDriveHeartbeat() {
+  driveHeartbeatActive = true;
+  if (driveHeartbeatTimer !== null) clearInterval(driveHeartbeatTimer);
+  driveHeartbeatTimer = setInterval(sendDriveHeartbeat, 500);
+}
+
+function stopDriveHeartbeat() {
+  driveHeartbeatActive = false;
+  if (driveHeartbeatTimer !== null) {
+    clearInterval(driveHeartbeatTimer);
+    driveHeartbeatTimer = null;
+  }
+}
+
+async function sendDriveHeartbeat() {
+  if (!driveHeartbeatActive) return;
+  try {
+    const response = await fetch("/api/control/heartbeat", { method: "POST" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch (_) {
+    stopDriveHeartbeat();
+    showControlResult(
+      "차량 heartbeat가 끊겼습니다. 차량 측 watchdog이 자동 정지합니다.",
+      "error"
+    );
+  }
+}
+
 async function loadReport(patrolId) {
   const response = await fetch(`/api/patrols/${patrolId}/report`);
   byId("report-content").textContent = response.ok
@@ -111,5 +206,11 @@ async function loadReports() {
 }
 
 byId("refresh-reports").addEventListener("click", loadReports);
+byId("target-speed").addEventListener("input", (event) => {
+  byId("target-speed-value").textContent = Number(event.target.value).toFixed(2);
+});
+byId("start-drive").addEventListener("click", () => sendControl("start"));
+byId("stop-drive").addEventListener("click", () => sendControl("stop"));
 connectLiveSocket();
 loadReports();
+loadControlStatus();

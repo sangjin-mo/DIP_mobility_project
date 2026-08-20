@@ -59,14 +59,18 @@
       <article class="panel controls-panel">
         <div class="panel-heading">
           <h2>로버 제어</h2>
-          <span class="muted">DR 제어 계약 미연결</span>
+          <span id="control-status" class="muted">제어 API 확인 중</span>
         </div>
+        <label class="speed-control" for="target-speed">
+          <span>목표 속도</span>
+          <strong><span id="target-speed-value">0.25</span> m/s</strong>
+          <input id="target-speed" type="range" min="0.05" max="1" step="0.05" value="0.25">
+        </label>
         <div class="controls">
-          <button disabled>순찰 시작</button>
-          <button disabled>정상 정지</button>
-          <button class="danger" disabled>긴급 정지</button>
+          <button id="start-drive" disabled>▶ 운행 시작</button>
+          <button id="stop-drive" class="danger" disabled>■ 정지 (비상)</button>
         </div>
-        <p class="notice">기존 DR 제어 함수가 확인되기 전에는 버튼이 명령을 보내지 않습니다.</p>
+        <p id="control-result" class="notice" role="status">차량 제어 API 설정을 확인하고 있습니다.</p>
       </article>
 
       <article class="panel event-panel">
