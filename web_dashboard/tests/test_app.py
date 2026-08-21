@@ -65,6 +65,7 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
         "start-drive",
         "stop-drive",
         "weather-temperature",
+        "weather-rain-probability",
         "rain-advice",
         "temperature-advice",
         "weather-fetched-at",
@@ -191,6 +192,7 @@ def test_weather_api_returns_normalised_kma_data(tmp_path):
         "weather_icon": "sunny",
         "is_raining": False,
         "precipitation_mm": 0,
+        "rain_probability_percent": 20,
         "wind_speed_mps": 2.1,
         "observed_at": "2026-08-20T14:00:00+09:00",
         "fetched_at": "2026-08-20T14:20:00+09:00",
@@ -210,6 +212,7 @@ def test_weather_api_returns_normalised_kma_data(tmp_path):
     assert status["weather_refresh_interval_s"] == 1800
     assert response.status_code == 200
     assert response.json()["temperature_c"] == 27.3
+    assert response.json()["rain_probability_percent"] == 20
 
 
 def test_weather_refresh_api_bypasses_server_cache(tmp_path):

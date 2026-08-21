@@ -76,7 +76,22 @@ class KmaWeatherService:
                 forecast_base = _forecast_base(now)
                 observations = self._request("getUltraSrtNcst", observation_base)
                 forecasts = self._request("getUltraSrtFcst", forecast_base)
-                result = self._normalise(observations, forecasts, observation_base, now)
+                probability_forecasts: list[dict[str, Any]] = []
+                try:
+                    probability_forecasts = self._request(
+                        "getVilageFcst", _village_forecast_base(now)
+                    )
+                except (WeatherDataError, urllib.error.URLError, TimeoutError, OSError):
+                    # POP belongs to the village forecast endpoint. A temporary
+                    # failure there must not hide otherwise valid observations.
+                    pass
+                result = self._normalise(
+                    observations,
+                    forecasts,
+                    probability_forecasts,
+                    observation_base,
+                    now,
+                )
             except (WeatherDataError, urllib.error.URLError, TimeoutError, OSError) as exc:
                 if self._cache is not None:
                     stale = dict(self._cache)
@@ -129,6 +144,7 @@ class KmaWeatherService:
         self,
         observations: list[dict[str, Any]],
         forecasts: list[dict[str, Any]],
+        probability_forecasts: list[dict[str, Any]],
         observation_base: datetime,
         fetched_at: datetime,
     ) -> dict[str, Any]:
@@ -138,6 +154,9 @@ class KmaWeatherService:
             if item.get("category")
         }
         forecast = _nearest_forecast(forecasts, fetched_at)
+        probability_forecast = _nearest_forecast(
+            probability_forecasts, fetched_at, categories={"POP"}
+        )
 
         temperature = _as_float(values.get("T1H"))
         humidity = _as_float(values.get("REH"))
@@ -164,10 +183,11 @@ class KmaWeatherService:
             "precipitation_type": precipitation_label,
             "is_raining": is_raining,
             "precipitation_mm": precipitation,
+            "rain_probability_percent": _as_float(probability_forecast.get("POP")),
             "wind_speed_mps": wind_speed,
             "observed_at": observation_base.isoformat(),
             "fetched_at": fetched_at.isoformat(),
-            "source": "기상청 초단기실황/예보",
+            "source": "기상청 초단기실황·초단기예보·단기예보",
             "location": self._location_label,
             "grid": {"nx": self._nx, "ny": self._ny},
             "is_stale": False,
@@ -185,11 +205,29 @@ def _forecast_base(now: datetime) -> datetime:
     return (now - timedelta(minutes=45)).replace(minute=30, second=0, microsecond=0)
 
 
-def _nearest_forecast(items: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+def _village_forecast_base(now: datetime) -> datetime:
+    # Village forecasts are issued at 02, 05, 08, 11, 14, 17, 20 and 23 KST.
+    # Allow ten minutes for publication before selecting the newest base slot.
+    available_at = now - timedelta(minutes=10)
+    slots = (2, 5, 8, 11, 14, 17, 20, 23)
+    available_slots = [hour for hour in slots if hour <= available_at.hour]
+    if available_slots:
+        return available_at.replace(hour=max(available_slots), minute=0, second=0, microsecond=0)
+    previous_day = available_at - timedelta(days=1)
+    return previous_day.replace(hour=23, minute=0, second=0, microsecond=0)
+
+
+def _nearest_forecast(
+    items: list[dict[str, Any]],
+    now: datetime,
+    *,
+    categories: set[str] | None = None,
+) -> dict[str, Any]:
+    selected_categories = categories or {"SKY", "PTY"}
     grouped: dict[datetime, dict[str, Any]] = {}
     for item in items:
         category = str(item.get("category", ""))
-        if category not in {"SKY", "PTY"}:
+        if category not in selected_categories:
             continue
         try:
             forecast_at = datetime.strptime(

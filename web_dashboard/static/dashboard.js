@@ -95,6 +95,7 @@ async function loadWeather(forceRefresh = false) {
     icon.textContent = weatherIcons[weather.weather_icon] || weatherIcons.unknown;
     icon.setAttribute("aria-label", weather.weather || "날씨 확인 불가");
     byId("weather-rain").textContent = weather.is_raining ? "있음" : "없음";
+    byId("weather-rain-probability").textContent = valueOrDash(weather.rain_probability_percent, 0);
     byId("weather-precipitation").textContent = valueOrDash(weather.precipitation_mm, 1);
     byId("weather-wind").textContent = valueOrDash(weather.wind_speed_mps, 1);
     updateWeatherAdvice(weather);
