@@ -6,6 +6,8 @@ let driveHeartbeatActive = false;
 let driveHeartbeatTimer = null;
 let weatherRefreshTimer = null;
 let weatherRefreshIntervalSeconds = 1800;
+const dashboardSlides = [...document.querySelectorAll("[data-dashboard-slide]")];
+let currentSlideIndex = 0;
 
 const weatherIcons = {
   sunny: "☀️", partly_cloudy: "🌤️", cloudy: "☁️", rain: "🌧️",
@@ -174,43 +176,41 @@ function refreshStillImage() {
   byId("capture-result").textContent = "최신 정지 이미지를 요청했습니다.";
 }
 
-async function loadReport(patrolId) {
-  const response = await fetch(`/api/patrols/${patrolId}/report`);
-  byId("report-content").textContent = response.ok ? await response.text() : "보고서를 불러오지 못했습니다.";
+function showDashboardSlide(index) {
+  currentSlideIndex = (index + dashboardSlides.length) % dashboardSlides.length;
+  dashboardSlides.forEach((slide, slideIndex) => {
+    const isActive = slideIndex === currentSlideIndex;
+    slide.hidden = !isActive;
+    slide.classList.toggle("is-active", isActive);
+    slide.setAttribute("aria-hidden", String(!isActive));
+  });
+  byId("current-slide").textContent = String(currentSlideIndex + 1);
+  byId("total-slides").textContent = String(dashboardSlides.length);
 }
 
-async function loadReports() {
-  const list = byId("report-list");
-  list.innerHTML = '<p class="muted">보고서 조회 중</p>';
-  try {
-    const response = await fetch("/api/patrols");
-    const reports = await response.json();
-    list.replaceChildren();
-    if (!reports.length) {
-      list.innerHTML = '<p class="muted">생성된 보고서가 없습니다.</p>';
-      return;
-    }
-    reports.forEach((report) => {
-      const button = document.createElement("button");
-      button.className = "report-item";
-      const title = document.createElement("strong");
-      title.textContent = report.patrol_id;
-      const detail = document.createElement("span");
-      detail.textContent = `${report.patrol_date} · ${report.overall_status}`;
-      button.append(title, detail);
-      button.addEventListener("click", () => loadReport(report.patrol_id));
-      list.appendChild(button);
-    });
-  } catch (_) {
-    list.innerHTML = '<p class="muted">보고서 서버에 연결할 수 없습니다.</p>';
-  }
+function toggleWorkAction(button) {
+  const isActive = button.getAttribute("aria-pressed") === "true";
+  button.setAttribute("aria-pressed", String(!isActive));
+  const activeActions = [...document.querySelectorAll(".work-toggle[aria-pressed='true']")]
+    .map((item) => item.textContent.trim().replace(/^\S+\s*/, ""));
+  byId("work-toggle-result").textContent = activeActions.length
+    ? `화면 선택: ${activeActions.join(", ")} · 실제 장치 명령은 전송하지 않습니다.`
+    : "화면 표시용 토글이며 실제 장치와 연결되지 않습니다.";
 }
 
-byId("refresh-reports").addEventListener("click", loadReports);
 byId("refresh-weather").addEventListener("click", () => loadWeather(true));
 byId("capture-image").addEventListener("click", refreshStillImage);
 byId("start-drive").addEventListener("click", () => sendControl("start"));
 byId("stop-drive").addEventListener("click", () => sendControl("stop"));
-loadReports();
+byId("previous-slide").addEventListener("click", () => showDashboardSlide(currentSlideIndex - 1));
+byId("next-slide").addEventListener("click", () => showDashboardSlide(currentSlideIndex + 1));
+document.querySelectorAll(".work-toggle").forEach((button) => {
+  button.addEventListener("click", () => toggleWorkAction(button));
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowLeft") showDashboardSlide(currentSlideIndex - 1);
+  if (event.key === "ArrowRight") showDashboardSlide(currentSlideIndex + 1);
+});
+showDashboardSlide(0);
 loadControlStatus();
 loadWeather();

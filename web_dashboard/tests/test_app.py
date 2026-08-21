@@ -64,23 +64,34 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
         "capture-image",
         "start-drive",
         "stop-drive",
+        "toggle-harvest",
+        "toggle-pest-control",
+        "toggle-watering",
+        "work-toggle-result",
+        "previous-slide",
+        "current-slide",
+        "total-slides",
+        "next-slide",
         "weather-temperature",
         "weather-rain-probability",
         "rain-advice",
         "temperature-advice",
         "weather-fetched-at",
-        "report-list",
-        "report-content",
     ):
         assert f'id="{element_id}"' in html
     assert "순찰 구역 맵" not in html
     assert "현재 속도" not in html
     assert "목표 속도" not in html
-    assert "농작물 00에 급수를 공급하세요" in html
-    assert "우산을 챙기세요" in html
-    assert "온열 질환에 유의하세요" in html
-    assert "야외 활동을 자제하세요" in html
-    assert "실제 분석값이 들어오기 전에는 임의 상태를 표시하지 않습니다." in html
+    assert "A구역 작물 레포트" in html
+    assert "B구역 작물 레포트" in html
+    assert html.count("data-dashboard-slide") == 4
+    assert "1 / 4 카메라 촬영" in html
+    assert "4 / 4 차량 제어" in html
+    assert "분석 완료 후 안내합니다." in html
+    assert "기상 상황 안내 기준" not in html
+    assert "농작물 상태별 조치 기준" not in html
+    assert "저장된 순찰 레포트" not in html
+    assert "화면 표시용 토글이며 실제 장치와 연결되지 않습니다." in html
 
 
 def test_control_api_is_disabled_until_rover_url_is_configured(tmp_path):
