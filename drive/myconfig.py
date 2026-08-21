@@ -226,3 +226,14 @@
 # PID_THROTTLE = 0.2                  # constant throttle value during path following
 # SAVE_PATH_BTN = "cross"             # joystick button to save path
 # RESET_ORIGIN_BTN = "triangle"       # joystick button to press to move car back to origin
+
+# Project dashboard control (feature/web-drive-control). Wheels must be
+# raised and STOP verified before START is tested. See drive/README.md.
+DASHBOARD_CONTROL_ENABLED = True
+DASHBOARD_CONTROL_TOKEN = "7z2V_0PAjETB7WTATjSuiIXLp5YSbmJFuI8Uap2m8uE"
+
+# Pilot-steered driving via the dashboard: START hands steering to
+# mypilot.h5 (local_angle mode); throttle/STOP/heartbeat stay dashboard-owned.
+# Requires manage.py drive --model=models/mypilot.h5. Verify with wheels
+# raised before a track test (see drive/README.md).
+DASHBOARD_USE_PILOT_STEERING = True

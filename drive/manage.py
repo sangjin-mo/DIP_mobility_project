@@ -137,10 +137,44 @@ def drive(cfg, model_path=None, use_joystick=False, model_type=None, camera_type
         ctr = LocalWebController()
 
     
-    V.add(ctr, 
+    V.add(ctr,
           inputs=['cam/image_array'],
           outputs=['user/angle', 'user/throttle', 'user/mode', 'recording'],
           threaded=True)
+
+    # Optional command input from the project dashboard. When enabled, this
+    # part deliberately overrides LocalWebController's user command and
+    # forces user mode. The part owns a heartbeat watchdog, so losing the
+    # browser/dashboard/API path always resolves to throttle=0 locally.
+    if getattr(cfg, 'DASHBOARD_CONTROL_ENABLED', False):
+        from dashboard_control import DashboardControlPart
+
+        if not cfg.DASHBOARD_CONTROL_TOKEN:
+            raise ValueError('DASHBOARD_CONTROL_TOKEN is required when dashboard control is enabled')
+
+        use_pilot_steering = getattr(cfg, 'DASHBOARD_USE_PILOT_STEERING', False)
+        if use_pilot_steering and not model_path:
+            raise ValueError(
+                'DASHBOARD_USE_PILOT_STEERING requires a trained model: '
+                'start with manage.py drive --model=<path to .h5>'
+            )
+
+        dashboard_control = DashboardControlPart(
+            host=cfg.DASHBOARD_CONTROL_HOST,
+            port=cfg.DASHBOARD_CONTROL_PORT,
+            token=cfg.DASHBOARD_CONTROL_TOKEN,
+            heartbeat_timeout_s=cfg.DASHBOARD_HEARTBEAT_TIMEOUT_S,
+            max_speed_mps=cfg.DASHBOARD_MAX_SPEED_MPS,
+            max_throttle=cfg.DASHBOARD_MAX_THROTTLE,
+            straight_steering=cfg.DASHBOARD_STRAIGHT_STEERING,
+            use_pilot_steering=use_pilot_steering,
+        )
+        V.add(
+            dashboard_control,
+            inputs=['user/angle', 'user/throttle', 'user/mode'],
+            outputs=['user/angle', 'user/throttle', 'user/mode'],
+            threaded=True,
+        )
 
     #this throttle filter will allow one tap back for esc reverse
     th_filter = ThrottleFilter()

@@ -24,6 +24,22 @@ MODELS_PATH = os.path.join(CAR_PATH, 'models')
 DRIVE_LOOP_HZ = 20      # the vehicle loop will pause if faster than this speed.
 MAX_LOOPS = None        # the vehicle loop can abort after this many iterations, when given a positive integer.
 
+# Project dashboard control (disabled until explicitly enabled on the Pi).
+# target_speed_mps is mapped linearly onto DASHBOARD_MAX_THROTTLE; calibrate
+# both values with the wheels raised before any ground test.
+DASHBOARD_CONTROL_ENABLED = False
+DASHBOARD_CONTROL_HOST = "0.0.0.0"
+DASHBOARD_CONTROL_PORT = 9200
+DASHBOARD_CONTROL_TOKEN = None
+DASHBOARD_HEARTBEAT_TIMEOUT_S = 1.5
+DASHBOARD_MAX_SPEED_MPS = 0.50
+DASHBOARD_MAX_THROTTLE = 0.45
+DASHBOARD_STRAIGHT_STEERING = 0.0
+# When True, START hands steering to the trained pilot model (DonkeyCar's
+# 'local_angle' mode) instead of driving straight. Requires manage.py to be
+# started with --model=<path to .h5>; throttle is still dashboard-capped.
+DASHBOARD_USE_PILOT_STEERING = False
+
 #CAMERA
 CAMERA_TYPE = "PICAM"   # (PICAM|WEBCAM|CVCAM|CSIC|V4L|MOCK)
 IMAGE_W = 160
@@ -47,8 +63,8 @@ DRIVE_TRAIN_TYPE = "SERVO_ESC" # SERVO_ESC|DC_STEER_THROTTLE|DC_TWO_WHEEL|SERVO_
 
 #STEERING
 STEERING_CHANNEL = 0            #channel on the 9685 pwm board 0-15
-STEERING_LEFT_PWM = 230         #pwm value for full left steering
-STEERING_RIGHT_PWM = 440        #pwm value for full right steering
+STEERING_LEFT_PWM = 400         #pwm value for full left steering
+STEERING_RIGHT_PWM = 660        #pwm value for full right steering
 
 #THROTTLE
 THROTTLE_CHANNEL = 0            #channel on the 9685 pwm board 0-15
@@ -76,7 +92,7 @@ HBRIDGE_PIN_RIGHT_BWD = 13
 #between different neural network designs. You can override this setting by passing the command
 #line parameter --type to the python manage.py train and drive commands.
 DEFAULT_MODEL_TYPE = 'linear'   #(linear|categorical|rnn|imu|behavior|3d|localizer|latent)
-BATCH_SIZE = 128                #how many records to use when doing one pass of gradient decent. Use a smaller number if your gpu is running out of memory.
+BATCH_SIZE = 16                #how many records to use when doing one pass of gradient decent. Use a smaller number if your gpu is running out of memory.
 TRAIN_TEST_SPLIT = 0.8          #what percent of records to use for training. the remaining used for validation.
 MAX_EPOCHS = 100                #how many times to visit all records of your data
 SHOW_PLOT = True                #would you like to see a pop up display of final loss?

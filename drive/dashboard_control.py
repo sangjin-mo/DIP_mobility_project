@@ -1,8 +1,9 @@
 """Dashboard command input for the DonkeyCar vehicle loop.
 
 This module is intentionally independent of DonkeyCar so its command and
-watchdog behaviour can be tested on a PC. ``web_manage.py`` adapts it to the
-existing DonkeyCar vehicle loop without changing the team's original files.
+watchdog behaviour can be tested on a PC. ``DashboardControlPart`` is added as
+a threaded DonkeyCar part by ``manage.py`` and becomes the sole source of
+user-mode steering/throttle while dashboard control is enabled.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ class DashboardControlPart:
         max_speed_mps: float,
         max_throttle: float,
         straight_steering: float = 0.0,
+        use_pilot_steering: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if heartbeat_timeout_s <= 0:
@@ -53,6 +55,7 @@ class DashboardControlPart:
         self._max_speed_mps = max_speed_mps
         self._max_throttle = max_throttle
         self._straight_steering = straight_steering
+        self._use_pilot_steering = use_pilot_steering
         self._clock = clock
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
@@ -76,14 +79,22 @@ class DashboardControlPart:
         _user_throttle: float | None,
         _user_mode: str | None,
     ) -> tuple[float, float, str]:
-        """Return safe user-mode commands for the current dashboard state."""
+        """Return safe drive commands for the current dashboard state.
+
+        While RUNNING, throttle is always the dashboard's own calibrated,
+        speed-capped value regardless of steering source. Steering is either
+        a fixed straight value, or handed to the trained pilot model via
+        DonkeyCar's 'local_angle' mode (requires manage.py to be started with
+        --model and DASHBOARD_USE_PILOT_STEERING enabled; see README).
+        """
         with self._lock:
             self._apply_watchdog_locked()
             if self._state != "RUNNING":
                 return 0.0, 0.0, "user"
             throttle = (self._target_speed_mps / self._max_speed_mps) * self._max_throttle
             throttle = min(max(throttle, 0.0), self._max_throttle)
-            return self._straight_steering, throttle, "user"
+            mode = "local_angle" if self._use_pilot_steering else "user"
+            return self._straight_steering, throttle, mode
 
     def shutdown(self) -> None:
         """DonkeyCar lifecycle hook; stopping the part also means stopping motors."""
