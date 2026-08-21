@@ -44,6 +44,44 @@ def test_dashboard_and_live_socket_reuse_existing_store(tmp_path):
     assert snapshot["telemetry"]["zone_id"] == 2
 
 
+def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(CAMERA_URL=None),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "스마트 농장 관리 대시보드" in html
+    for element_id in (
+        "capture-image",
+        "start-drive",
+        "stop-drive",
+        "weather-temperature",
+        "rain-advice",
+        "temperature-advice",
+        "weather-fetched-at",
+        "report-list",
+        "report-content",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "순찰 구역 맵" not in html
+    assert "현재 속도" not in html
+    assert "목표 속도" not in html
+    assert "농작물 00에 급수를 공급하세요" in html
+    assert "우산을 챙기세요" in html
+    assert "온열 질환에 유의하세요" in html
+    assert "야외 활동을 자제하세요" in html
+    assert "실제 분석값이 들어오기 전에는 임의 상태를 표시하지 않습니다." in html
+
+
 def test_control_api_is_disabled_until_rover_url_is_configured(tmp_path):
     app = create_app(
         ai_settings=Settings(
@@ -91,6 +129,30 @@ def test_control_api_forwards_validated_commands(tmp_path):
     assert response.status_code == 200
     assert response.json()["rover"]["state"] == "RUNNING"
     assert send.call_args.args[1:] == (0.3,)
+
+
+def test_control_api_uses_default_speed_for_button_only_start(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(
+            ROVER_CONTROL_URL="http://rover.local:9200/api/control",
+            DEFAULT_TARGET_SPEED_MPS=0.25,
+        ),
+    )
+    accepted = {"accepted": True, "command": "START", "rover": {"state": "RUNNING"}}
+
+    with (
+        patch("web_dashboard.app.RoverControlService.send", return_value=accepted) as send,
+        TestClient(app) as client,
+    ):
+        response = client.post("/api/control/start", json={})
+
+    assert response.status_code == 200
+    assert send.call_args.args[1:] == (0.25,)
 
 
 def test_weather_api_is_disabled_until_kma_settings_are_configured(tmp_path):
