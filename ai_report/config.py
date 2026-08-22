@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_TIMEOUT_S: int = 120
     LLM_MAX_INPUT_TOKENS: int = 60000
-    PROMPT_VERSION: str = "v1.0"
+    PROMPT_VERSION: str = "v1.1"
     OPENAI_API_KEY: str | None = None  # env only; never logged, never committed
 
     # Retry backoff (spec §9: "3 attempts, exponential backoff 2/4/8 s") —
