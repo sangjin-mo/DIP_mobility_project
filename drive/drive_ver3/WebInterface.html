@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PiRacer 구동 제어</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", "Noto Sans KR", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b1210; color: #eef7f2; }
+    main { width: min(520px, calc(100% - 32px)); padding: 28px; border: 1px solid #294136; border-radius: 18px; background: #121d19; }
+    h1 { margin: 0 0 8px; font-size: 26px; }
+    .sub { margin: 0 0 24px; color: #96aa9f; }
+    .status { display: flex; justify-content: space-between; padding: 16px; margin-bottom: 18px; border-radius: 12px; background: #182720; }
+    .status strong { color: #61d095; }
+    label { display: block; margin: 15px 0 7px; color: #b8c9c0; }
+    input[type="password"] { width: 100%; padding: 12px; border: 1px solid #294136; border-radius: 10px; background: #09100d; color: #eef7f2; }
+    input[type="range"] { width: 100%; accent-color: #61d095; }
+    .speed-row { display: flex; justify-content: space-between; }
+    .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 24px; }
+    button { min-height: 54px; border: 0; border-radius: 12px; color: white; font-size: 17px; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: wait; }
+    #start { background: #278a52; }
+    #stop { background: #c93636; }
+    #message { min-height: 22px; margin: 18px 0 0; color: #96aa9f; }
+    #message.error { color: #ef6b6b; }
+    #message.success { color: #61d095; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PiRacer 구동 제어</h1>
+    <p class="sub">구동/정지와 속도만 제어합니다. 라이다 안전 정지는 차량에서 자동 처리됩니다.</p>
+    <div class="status"><span>차량 명령 상태</span><strong id="state">확인 중</strong></div>
+    <label for="token">제어 토큰</label>
+    <input id="token" type="password" autocomplete="off" placeholder="DASHBOARD_CONTROL_TOKEN">
+    <label class="speed-row" for="speed"><span>목표 속도</span><strong><span id="speed-value">0.25</span> m/s</strong></label>
+    <input id="speed" type="range" min="0.05" max="0.50" step="0.05" value="0.25">
+    <div class="buttons"><button id="start">구동</button><button id="stop">정지</button></div>
+    <p id="message" role="status">정지 명령은 즉시 유지됩니다.</p>
+  </main>
+  <script>
+    const state = document.getElementById("state");
+    const token = document.getElementById("token");
+    const speed = document.getElementById("speed");
+    const speedValue = document.getElementById("speed-value");
+    const start = document.getElementById("start");
+    const stop = document.getElementById("stop");
+    const message = document.getElementById("message");
+    let heartbeatTimer = null;
+
+    token.value = sessionStorage.getItem("piracer-control-token") || "";
+    token.addEventListener("input", () => sessionStorage.setItem("piracer-control-token", token.value));
+    speed.addEventListener("input", () => { speedValue.textContent = Number(speed.value).toFixed(2); });
+    function headers() { return { "Content-Type": "application/json", "Authorization": `Bearer ${token.value}` }; }
+    function setMessage(text, kind = "") { message.textContent = text; message.className = kind; }
+    function generateCommandId() {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") return crypto.randomUUID();
+      return `cmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
+    async function command(name) {
+      start.disabled = true; stop.disabled = true;
+      if (name === "STOP") stopHeartbeat();
+      const payload = { command_id: generateCommandId(), command: name, sent_at_ms: Date.now() };
+      if (name === "START") payload.target_speed_mps = Number(speed.value);
+      try {
+        const response = await fetch("/api/control", { method: "POST", headers: headers(), body: JSON.stringify(payload) });
+        const result = await response.json();
+        if (!response.ok || result.accepted !== true) throw new Error(result.reason || `HTTP ${response.status}`);
+        state.textContent = result.state;
+        if (name === "START") {
+          setMessage("구동 명령을 보냈습니다. 장애물은 라이다가 자동으로 정지/재개합니다.", "success");
+          startHeartbeat();
+        } else {
+          setMessage("정지 명령을 보냈습니다. 라이다가 맑아져도 다시 구동되지 않습니다.", "success");
+        }
+      } catch (error) { setMessage(`명령 실패: ${error.message}`, "error"); }
+      finally { start.disabled = false; stop.disabled = false; }
+    }
+    function startHeartbeat() {
+      stopHeartbeat();
+      heartbeatTimer = setInterval(async () => {
+        try {
+          const response = await fetch("/api/control", {
+            method: "POST", headers: headers(),
+            body: JSON.stringify({ command_id: generateCommandId(), command: "HEARTBEAT", sent_at_ms: Date.now() })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.reason || `HTTP ${response.status}`);
+          state.textContent = result.state;
+          if (result.state !== "RUNNING") { stopHeartbeat(); setMessage("차량은 정지 상태입니다.", "error"); }
+        } catch (_) {
+          state.textContent = "연결 불안정";
+          setMessage("통신 재시도 중입니다. 계속 실패하면 차량은 자동 정지합니다.", "error");
+        }
+      }, 500);
+    }
+    function stopHeartbeat() { if (heartbeatTimer !== null) clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    async function loadStatus() {
+      try {
+        const response = await fetch("/api/status", { cache: "no-store" });
+        const result = await response.json(); state.textContent = result.state;
+      } catch (_) { state.textContent = "연결 실패"; }
+    }
+    start.addEventListener("click", () => command("START"));
+    stop.addEventListener("click", () => command("STOP"));
+    loadStatus(); setInterval(loadStatus, 1000);
+  </script>
+</body>
+</html>
