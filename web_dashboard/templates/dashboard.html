@@ -20,25 +20,21 @@
 
   <main class="dashboard-shell">
     <section class="dashboard-grid">
-      <article class="panel camera-panel">
+      <article class="panel camera-panel dashboard-slide is-active" data-dashboard-slide aria-label="1 / 4 카메라 촬영">
         <div class="panel-heading">
           <div><p class="section-kicker">01 · CAMERA</p><h2>카메라 촬영</h2></div>
           <span id="camera-status" class="status-pill neutral">미연결</span>
         </div>
-        {% if camera_url %}
-        <div class="camera-still"><img id="camera-image" src="{{ camera_url }}" alt="최근 촬영 이미지"></div>
-        {% else %}
-        <div class="camera-placeholder">
+        <div id="camera-still" class="camera-still"{% if not camera_url %} hidden{% endif %}><img id="camera-image"{% if camera_url %} src="{{ camera_url }}"{% endif %} alt="최근 촬영 이미지"></div>
+        <div id="camera-placeholder" class="camera-placeholder"{% if camera_url %} hidden{% endif %}>
           <div class="camera-illustration" aria-hidden="true"><span>🌿</span><span>🌱</span><span>🌿</span><i></i></div>
           <strong>촬영 이미지 대기</strong>
-          <p>스트리밍하지 않습니다. 비전팀의 촬영 API가 준비되면 버튼을 눌렀을 때 정지 이미지만 표시합니다.</p>
         </div>
-        {% endif %}
         <button id="capture-image" class="capture-button" type="button" disabled>📷 이미지 촬영</button>
-        <p id="capture-result" class="notice" role="status">비전팀 촬영 API 연동 대기 중입니다.</p>
+        <p id="capture-result" class="notice" role="status"></p>
       </article>
 
-      <article class="panel weather-panel" aria-label="기상 정보">
+      <article class="panel weather-panel dashboard-slide" data-dashboard-slide aria-label="2 / 4 기상 정보" hidden>
         <div class="panel-heading">
           <div><p class="section-kicker">02 · KMA WEATHER</p><h2>기상 정보</h2></div>
           <button id="refresh-weather" class="secondary" type="button">↻ 새로고침</button>
@@ -66,73 +62,61 @@
           <span>조회 <strong id="weather-fetched-at">—</strong></span>
         </div>
         <p id="weather-source" class="notice">외부 관측값이며 비닐하우스 내부 센서값이 아닙니다.</p>
+        <section class="weather-charts" aria-label="지난 24시간 시간별 기상 관측 그래프">
+          <article class="weather-chart-card">
+            <div class="weather-chart-heading"><strong>시간별 온도</strong><span>지난 24시간 · 1시간 단위</span></div>
+            <svg id="temperature-chart" class="weather-chart" viewBox="0 0 720 190" role="img" aria-label="지난 24시간 온도 관측 그래프"></svg>
+          </article>
+          <article class="weather-chart-card">
+            <div class="weather-chart-heading"><strong>시간별 강수량</strong><span>지난 24시간 · 1시간 단위</span></div>
+            <svg id="precipitation-chart" class="weather-chart" viewBox="0 0 720 190" role="img" aria-label="지난 24시간 강수량 관측 그래프"></svg>
+          </article>
+        </section>
       </article>
 
-      <article class="panel crop-report-panel">
+      <article class="panel crop-report-panel dashboard-slide" data-dashboard-slide aria-label="3 / 4 작물 상태 레포트" hidden>
         <div class="panel-heading">
-          <div><p class="section-kicker">03 · CROP & REPORT</p><h2>작물 상태 및 레포트</h2></div>
-          <button id="refresh-reports" class="secondary" type="button">↻ 레포트 새로고침</button>
+          <div><p class="section-kicker">03 · CROP REPORT</p><h2>구역별 작물 상태 레포트</h2></div>
+          <div class="report-heading-actions"><span id="crop-report-status" class="status-pill neutral">레포트 확인 중</span><button id="refresh-report" class="secondary" type="button">↻ 새로고침</button></div>
         </div>
-        <div class="crop-grid">
-          <article class="crop-card">
-            <div class="crop-title"><strong>A구역</strong><span class="crop-state pending">판정 대기</span></div>
-            <div class="crop-body"><span class="crop-emoji" aria-hidden="true">🌱</span><p>비전 분석 결과가 수신되면 작물명과 상태를 표시합니다.</p></div>
-          </article>
-          <article class="crop-card">
-            <div class="crop-title"><strong>B구역</strong><span class="crop-state pending">판정 대기</span></div>
-            <div class="crop-body"><span class="crop-emoji" aria-hidden="true">🌿</span><p>실제 분석값이 들어오기 전에는 임의 상태를 표시하지 않습니다.</p></div>
-          </article>
+        <div id="crop-grid" class="crop-grid">
+          <article class="crop-card"><div class="crop-title"><strong>A구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
+          <article class="crop-card"><div class="crop-title"><strong>B구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
         </div>
-        <div class="report-rules">
-          <section>
-            <h3>기상 상황 안내 기준</h3>
-            <table>
-              <thead><tr><th>항목</th><th>기준</th><th>안내 문구</th></tr></thead>
-              <tbody>
-                <tr><td>강우량</td><td>5 mm 이하</td><td>별도 사항 없음</td></tr>
-                <tr><td>강우량</td><td>5 mm 초과</td><td>우산을 챙기세요</td></tr>
-                <tr><td>온도</td><td>30℃ 이하</td><td>야외활동 하기 좋은 날씨입니다</td></tr>
-                <tr><td>온도</td><td>30℃ 초과 ~ 35℃ 미만</td><td>온열 질환에 유의하세요</td></tr>
-                <tr><td>온도</td><td>35℃ 이상</td><td>야외 활동을 자제하세요</td></tr>
-              </tbody>
-            </table>
-          </section>
-          <section>
-            <h3>농작물 상태별 조치 기준</h3>
-            <table>
-              <thead><tr><th>판정</th><th>레포트 문구</th></tr></thead>
-              <tbody>
-                <tr><td><span class="rule-state normal">정상</span></td><td>농작물 00을 수확하세요</td></tr>
-                <tr><td><span class="rule-state wilted">시듦</span></td><td>농작물 00에 급수를 공급하세요</td></tr>
-                <tr><td><span class="rule-state pest">병충해</span></td><td>농작물 00에 약을 살포하세요</td></tr>
-              </tbody>
-            </table>
-          </section>
-        </div>
-        <div class="saved-reports">
-          <h3>저장된 순찰 레포트</h3>
-          <div class="report-layout">
-            <div id="report-list" class="report-list"><p class="muted">보고서 조회 중</p></div>
-            <pre id="report-content" class="report-content">순찰 결과를 선택하세요.</pre>
-          </div>
-        </div>
+        <div class="llm-report-wrap"><div class="llm-report-title"><strong>LLM 종합 레포트</strong><span id="report-generated-at">—</span></div><pre id="llm-report">생성된 레포트가 없습니다.</pre></div>
       </article>
 
-      <article class="panel controls-panel">
+      <article class="panel controls-panel dashboard-slide" data-dashboard-slide aria-label="4 / 4 차량 제어" hidden>
         <div class="panel-heading">
           <div><p class="section-kicker">04 · VEHICLE CONTROL</p><h2>차량 제어</h2></div>
           <span id="control-status" class="status-pill neutral">API 확인 중</span>
         </div>
         <div class="control-hero" aria-hidden="true">🚜</div>
-        <p class="control-description">설정된 기본 속도로 운행을 시작하거나 즉시 정지합니다.</p>
+        <section class="speed-control" aria-labelledby="target-speed-label">
+          <div class="speed-control-heading"><span id="target-speed-label">목표 속도</span><strong><span id="target-speed-value">0.25</span> m/s</strong></div>
+          <input id="target-speed" type="range" min="0.05" max="0.50" step="0.05" value="0.25" disabled aria-label="차량 목표 속도">
+          <div class="speed-range-labels"><span>0.05</span><span id="target-speed-maximum">0.50 m/s</span></div>
+        </section>
         <div class="controls">
           <button id="start-drive" class="start-button" disabled>▶ 운행</button>
           <button id="stop-drive" class="stop-button" disabled>■ 정지</button>
         </div>
         <p id="control-result" class="notice" role="status">차량 제어 API 설정을 확인하고 있습니다.</p>
-        <p class="safety-note">운행 중 대시보드 연결이 끊기면 차량 측 watchdog이 자동으로 정지합니다.</p>
+        <section class="work-toggle-section" aria-labelledby="work-toggle-title">
+          <h3 id="work-toggle-title">작업 선택</h3>
+          <div class="work-toggles">
+            <button id="toggle-harvest" class="work-toggle harvest" type="button" aria-pressed="false">🌾 수확</button>
+            <button id="toggle-pest-control" class="work-toggle pest-control" type="button" aria-pressed="false">🛡 방제</button>
+            <button id="toggle-watering" class="work-toggle watering" type="button" aria-pressed="false">💧 급수</button>
+          </div>
+        </section>
       </article>
     </section>
+    <nav class="carousel-controls" aria-label="대시보드 화면 이동">
+      <button id="previous-slide" class="carousel-arrow" type="button" aria-label="이전 화면">‹</button>
+      <strong class="carousel-position"><span id="current-slide">1</span> / <span id="total-slides">4</span></strong>
+      <button id="next-slide" class="carousel-arrow" type="button" aria-label="다음 화면">›</button>
+    </nav>
   </main>
   <script src="/static/dashboard.js" defer></script>
 </body>

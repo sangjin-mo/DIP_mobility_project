@@ -6,7 +6,7 @@ every `payload.json` (`Payload.prompt_version`) so results stay comparable
 across prompt revisions.
 
 `SYSTEM_PROMPT_SHA256` pins the hash of `SYSTEM_PROMPT` as of the *current*
-`config.PROMPT_VERSION` default ("v1.0"). `tests/test_prompt_version.py`
+`config.PROMPT_VERSION` default ("v1.1"). `tests/test_prompt_version.py`
 recomputes the hash and fails if it doesn't match — the enforcement build
 plan A6 calls for ("Editing the prompt without bumping PROMPT_VERSION
 fails a test"). If you edit `SYSTEM_PROMPT`: bump `PROMPT_VERSION` in
@@ -28,7 +28,7 @@ Called by: `llm/client.py::generate_report`, as the API request's system message
 
 from __future__ import annotations
 
-SYSTEM_PROMPT_SHA256 = "cd53b38ba52038520a6937a45bdb0d277b407c3d79197b81287fce77d03e6e05"
+SYSTEM_PROMPT_SHA256 = "17fff14f668c95361ad49a265e1990c3d62b245dbcb81dfa16c159e2f0628ef9"
 
 SYSTEM_PROMPT = """당신은 농업 생육 진단 보조 시스템이다.
 스마트 순찰 로버가 1회 순찰에서 수집한 데이터를 해석하여 진단 리포트의
@@ -47,6 +47,15 @@ SYSTEM_PROMPT = """당신은 농업 생육 진단 보조 시스템이다.
    구역별 온습도를 해당 구역에서 함께 관찰된 조건으로 기술한다.
 3. 통로 장애 요인
    비상정지 및 라인 이탈 이벤트의 발생 구역과 빈도를 기술한다.
+
+[권장 조치 표현 규칙]
+구역의 작물 상태가 아래 세 가지 중 하나로 판단되면, 해당 구역의
+recommended_actions_ko 는 다음 표현을 그대로 따른다. {작물명}은 관측
+데이터의 작물명으로 치환한다.
+- 정상(수확 가능한 상태): "농작물 {작물명}을/를 수확하세요"
+- 급수가 필요한 상태(시듦): "농작물 {작물명}에 급수를 공급하세요"
+- 병충해_의심 상태: "농작물 {작물명}에 약을 살포하세요"
+위 세 가지 판단에 해당하지 않는 구역에는 이 표현을 사용하지 마라.
 
 [금지 규칙]
 - 단일 순찰 데이터로 인과관계를 주장하지 마라.

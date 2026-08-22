@@ -227,10 +227,14 @@
 # SAVE_PATH_BTN = "cross"             # joystick button to save path
 # RESET_ORIGIN_BTN = "triangle"       # joystick button to press to move car back to origin
 
-# Project dashboard control (feature/web-drive-control). Wheels must be
-# raised and STOP verified before START is tested. See drive/README.md.
+import os
+
+# Project dashboard control. Wheels must be raised and STOP verified before
+# START is tested. See drive/README.md. The token is read from the
+# environment so a real secret is never committed here — export
+# DASHBOARD_CONTROL_TOKEN before starting manage.py (see drive/README.md).
 DASHBOARD_CONTROL_ENABLED = True
-DASHBOARD_CONTROL_TOKEN = "7z2V_0PAjETB7WTATjSuiIXLp5YSbmJFuI8Uap2m8uE"
+DASHBOARD_CONTROL_TOKEN = os.environ.get("DASHBOARD_CONTROL_TOKEN")
 
 # Pilot-steered driving via the dashboard: START hands steering to
 # mypilot.h5 (local_angle mode); throttle/STOP/heartbeat stay dashboard-owned.
