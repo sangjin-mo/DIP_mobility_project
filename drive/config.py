@@ -63,8 +63,8 @@ DRIVE_TRAIN_TYPE = "SERVO_ESC" # SERVO_ESC|DC_STEER_THROTTLE|DC_TWO_WHEEL|SERVO_
 
 #STEERING
 STEERING_CHANNEL = 0            #channel on the 9685 pwm board 0-15
-STEERING_LEFT_PWM = 230         #pwm value for full left steering
-STEERING_RIGHT_PWM = 440        #pwm value for full right steering
+STEERING_LEFT_PWM = 400         #pwm value for full left steering
+STEERING_RIGHT_PWM = 660        #pwm value for full right steering
 
 #THROTTLE
 THROTTLE_CHANNEL = 0            #channel on the 9685 pwm board 0-15
