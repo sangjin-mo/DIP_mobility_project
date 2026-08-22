@@ -92,6 +92,12 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .speed-control input[type="range"] { width: 100%; margin: 10px 0 2px; accent-color: var(--green); cursor: pointer; }
 .speed-control input[type="range"]:disabled { cursor: not-allowed; opacity: .48; }
 .speed-range-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
+.vehicle-diagnostics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin: 0 0 12px; text-align: left; }
+.vehicle-diagnostics div { padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fbfcfb; }
+.vehicle-diagnostics span { display: block; margin-bottom: 3px; color: var(--muted); font-size: 9px; }
+.vehicle-diagnostics strong { font-size: 11px; }
+.vehicle-diagnostics .blocked { color: var(--red); }
+.vehicle-diagnostics .clear { color: var(--green-dark); }
 .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .controls button { min-height: 58px; font-size: 16px; }
 .work-toggle-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); text-align: left; }
@@ -127,6 +133,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .weather-primary { border-right: 0; border-bottom: 1px solid var(--line); }
   .weather-details { padding: 15px 8px 0; }
   .weather-charts { grid-template-columns: 1fr; }
+  .vehicle-diagnostics { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 440px) {
   .dashboard-shell { width: min(100% - 20px,1450px); margin-top: 10px; }

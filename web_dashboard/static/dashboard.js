@@ -89,7 +89,7 @@ async function loadControlStatus() {
   setControlButtons();
 }
 
-function applyRoverState(state, targetSpeed = null) {
+function applyRoverState(state, targetSpeed = null, details = {}) {
   roverState = state || "UNKNOWN";
   const numericSpeed = Number(targetSpeed);
   if (state === "RUNNING" && Number.isFinite(numericSpeed) && numericSpeed > 0) {
@@ -98,7 +98,11 @@ function applyRoverState(state, targetSpeed = null) {
     byId("target-speed-value").textContent = numericSpeed.toFixed(2);
   }
   const status = byId("control-status");
-  if (state === "RUNNING") {
+  const lidarBlocked = details.lidar_blocked === true;
+  if (state === "RUNNING" && lidarBlocked) {
+    status.textContent = "LiDAR 안전 정지";
+    status.className = "status-pill warning";
+  } else if (state === "RUNNING") {
     status.textContent = "운행 중";
     status.className = "status-pill success";
   } else if (state === "STOPPED") {
@@ -108,6 +112,40 @@ function applyRoverState(state, targetSpeed = null) {
     status.textContent = state === "EMERGENCY" ? "비상 정지" : "상태 확인 필요";
     status.className = "status-pill neutral";
   }
+
+  const motionLabels = {
+    RUNNING: "주행 출력 중",
+    STOPPED: "정지",
+    LIDAR_BLOCKED: "LiDAR 차단",
+    OUTPUT_STOPPED: "출력 차단",
+  };
+  const motion = byId("motion-state");
+  motion.textContent = motionLabels[details.motion_state] || "상태 미제공";
+  motion.className = details.motion_state === "LIDAR_BLOCKED" ? "blocked" :
+    details.motion_state === "RUNNING" ? "clear" : "";
+
+  const lidar = byId("lidar-state");
+  if (details.lidar_connected === undefined) {
+    lidar.textContent = "상태 미제공";
+    lidar.className = "";
+  } else if (!details.lidar_connected) {
+    lidar.textContent = "연결 오류";
+    lidar.className = "blocked";
+  } else if (lidarBlocked) {
+    lidar.textContent = "장애물 감지";
+    lidar.className = "blocked";
+  } else {
+    lidar.textContent = "정상";
+    lidar.className = "clear";
+  }
+  const hasNearest = details.lidar_nearest_m !== null && details.lidar_nearest_m !== undefined;
+  const nearest = Number(details.lidar_nearest_m);
+  byId("lidar-nearest").textContent = hasNearest && Number.isFinite(nearest)
+    ? `${nearest.toFixed(3)} m` : "-";
+  const hasApplied = details.applied_throttle !== null && details.applied_throttle !== undefined;
+  const applied = Number(details.applied_throttle);
+  byId("applied-throttle").textContent = hasApplied && Number.isFinite(applied)
+    ? applied.toFixed(3) : "-";
 }
 
 async function loadRoverStatus() {
@@ -117,7 +155,7 @@ async function loadRoverStatus() {
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
     controlReachable = Boolean(result.connected);
-    applyRoverState(result.state, result.target_speed_mps);
+    applyRoverState(result.state, result.target_speed_mps, result);
     if (result.state !== "RUNNING" && driveHeartbeatActive) stopDriveHeartbeat();
   } catch (_) {
     controlReachable = false;
@@ -339,6 +377,7 @@ async function sendControl(command) {
     applyRoverState(
       result.rover && result.rover.state,
       result.rover && result.rover.target_speed_mps,
+      result.rover || {},
     );
     showControlResult(`${command === "start" ? "운행" : "정지"} 명령이 차량에서 승인되었습니다.`, "success");
     if (command === "start") startDriveHeartbeat();
@@ -375,11 +414,11 @@ async function sendDriveHeartbeat() {
       // Vehicle is no longer running (watchdog timeout elsewhere, or STOP
       // issued from another client) - nothing left to keep alive.
       stopDriveHeartbeat();
-      applyRoverState(state, result.rover && result.rover.target_speed_mps);
+      applyRoverState(state, result.rover && result.rover.target_speed_mps, result.rover || {});
       showControlResult("차량이 정지 상태입니다.", "error");
     } else {
       controlReachable = true;
-      applyRoverState(state, result.rover && result.rover.target_speed_mps);
+      applyRoverState(state, result.rover && result.rover.target_speed_mps, result.rover || {});
       showControlResult("");
     }
   } catch (_) {

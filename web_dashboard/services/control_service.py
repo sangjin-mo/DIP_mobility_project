@@ -63,11 +63,23 @@ class RoverControlService:
         state = result.get("state")
         if state not in {"RUNNING", "STOPPED", "EMERGENCY"}:
             raise ControlCommandError("차량 상태 API가 올바른 state를 반환하지 않았습니다.")
-        return {
+        status = {
             "connected": True,
             "state": state,
             "target_speed_mps": result.get("target_speed_mps"),
         }
+        for field in (
+            "motion_state",
+            "commanded_throttle",
+            "applied_throttle",
+            "drive_mode",
+            "lidar_connected",
+            "lidar_blocked",
+            "lidar_nearest_m",
+        ):
+            if field in result:
+                status[field] = result[field]
+        return status
 
     def send(self, command: DriveCommand, target_speed_mps: float | None = None) -> dict:
         if not self._control_url:

@@ -105,6 +105,29 @@ def test_status_uses_rover_status_endpoint_and_token():
     assert result == {"connected": True, "state": "RUNNING", "target_speed_mps": 0.25}
 
 
+def test_status_preserves_optional_lidar_and_applied_output_diagnostics():
+    service = RoverControlService("http://rover.local:9200/api/control")
+    rover = {
+        "accepted": True,
+        "state": "RUNNING",
+        "target_speed_mps": 0.35,
+        "motion_state": "LIDAR_BLOCKED",
+        "commanded_throttle": 0.315,
+        "applied_throttle": 0.0,
+        "drive_mode": "local_angle",
+        "lidar_connected": True,
+        "lidar_blocked": True,
+        "lidar_nearest_m": 0.12,
+    }
+    with patch(
+        "web_dashboard.services.control_service.urllib.request.urlopen",
+        return_value=FakeResponse(rover),
+    ):
+        result = service.status()
+
+    assert result == {"connected": True, **{key: value for key, value in rover.items() if key != "accepted"}}
+
+
 def test_status_rejects_unknown_rover_state():
     service = RoverControlService("http://rover.local:9200/api/control")
     with patch(

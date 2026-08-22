@@ -97,6 +97,12 @@
           <input id="target-speed" type="range" min="0.05" max="0.50" step="0.05" value="0.25" disabled aria-label="차량 목표 속도">
           <div class="speed-range-labels"><span>0.05</span><span id="target-speed-maximum">0.50 m/s</span></div>
         </section>
+        <section class="vehicle-diagnostics" aria-label="차량 안전 상태">
+          <div><span>실제 동작</span><strong id="motion-state">상태 미제공</strong></div>
+          <div><span>LiDAR</span><strong id="lidar-state">상태 미제공</strong></div>
+          <div><span>최근 거리</span><strong id="lidar-nearest">-</strong></div>
+          <div><span>적용 출력</span><strong id="applied-throttle">-</strong></div>
+        </section>
         <div class="controls">
           <button id="start-drive" class="start-button" disabled>▶ 운행</button>
           <button id="stop-drive" class="stop-button" disabled>■ 정지</button>
