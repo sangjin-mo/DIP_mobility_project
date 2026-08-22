@@ -184,6 +184,52 @@ def _llm_recommendation_lines(agg: PatrolAggregate, llm: LlmReportOutput | None)
     return lines
 
 
+def _ends_with_final_consonant(word: str) -> bool:
+    """Whether `word`'s last syllable has a Hangul final consonant (batchim),
+    to choose the 을/를 object particle in `crop_status_advisory`. Only
+    meaningful when the last character is a complete Hangul syllable block
+    (U+AC00-U+D7A3); anything else (Latin letters, digits, punctuation)
+    returns `False` (picks 를) rather than raising.
+    """
+    if not word:
+        return False
+    last = word[-1]
+    if not ("가" <= last <= "힣"):
+        return False
+    return (ord(last) - ord("가")) % 28 != 0
+
+
+_CROP_STATUS_ACTIONS = {
+    "정상": "수확하세요",
+    "시듦": "급수를 공급하세요",
+    "병충해": "약을 살포하세요",
+}
+
+
+def crop_status_advisory(status: str, crop_name: str) -> str | None:
+    """Rule-based per-crop action message for a three-state advisory scenario
+    (정상/시듦/병충해) given directly as report-format copy, independent of
+    the C2 contract's `CropState` (정상/미성숙/병충해_의심/판단불가): 시듦
+    (wilted, needs water) and 병충해 (pest/disease) are not the same concepts
+    as `CropState.IMMATURE`/`SUSPECTED_DISEASE`, so this deliberately does
+    not read or extend that enum — see its docstring on why adding a value
+    there is a contract violation instead. Nothing in the pipeline currently
+    produces these three specific status labels; this is the rule table on
+    its own, ready to be called once a real per-crop status source exists
+    (e.g. wired into `_build_zone_views` alongside `_recommendation_line`).
+
+    Returns `None` for any status outside the three known labels, including
+    every real `CropState` value, rather than guessing at one.
+    """
+    action = _CROP_STATUS_ACTIONS.get(status)
+    if action is None:
+        return None
+    if status == "정상":
+        particle = "을" if _ends_with_final_consonant(crop_name) else "를"
+        return f"농작물 {crop_name}{particle} {action}"
+    return f"농작물 {crop_name}에 {action}"
+
+
 def _jinja_env() -> Environment:
     """Build the Jinja environment `render_report` renders with.
 

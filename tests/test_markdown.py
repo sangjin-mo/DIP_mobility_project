@@ -15,7 +15,7 @@ from ai_report.models import (
     ZoneMetadata,
 )
 from ai_report.pipeline.segment import PatrolSegmentation, ZoneWindow
-from ai_report.render.markdown import render_report
+from ai_report.render.markdown import crop_status_advisory, render_report
 
 PATROL_ID = "20260813_1430"
 
@@ -314,3 +314,22 @@ def test_deterministic_sections_identical_with_and_without_llm():
     assert "**주의**" in with_llm
     assert "| tomato | 정상 | 8 |" in without_llm
     assert "| tomato | 정상 | 8 |" in with_llm
+
+
+def test_crop_status_advisory_normal_picks_object_particle_by_batchim():
+    # 당근 ends in a syllable with a final consonant (batchim) -> 을
+    assert crop_status_advisory("정상", "당근") == "농작물 당근을 수확하세요"
+    # 상추 ends in a syllable with no final consonant -> 를
+    assert crop_status_advisory("정상", "상추") == "농작물 상추를 수확하세요"
+
+
+def test_crop_status_advisory_wilted_and_pest():
+    assert crop_status_advisory("시듦", "상추") == "농작물 상추에 급수를 공급하세요"
+    assert crop_status_advisory("병충해", "고추") == "농작물 고추에 약을 살포하세요"
+
+
+def test_crop_status_advisory_unknown_status_returns_none():
+    # Real CropState values are deliberately not part of this rule table.
+    assert crop_status_advisory("미성숙", "상추") is None
+    assert crop_status_advisory("판단불가", "상추") is None
+    assert crop_status_advisory("병충해_의심", "상추") is None
