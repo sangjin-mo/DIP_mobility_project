@@ -165,10 +165,24 @@ async function sendDriveHeartbeat() {
   if (!driveHeartbeatActive) return;
   try {
     const response = await fetch("/api/control/heartbeat", { method: "POST" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    const state = result.rover && result.rover.state;
+    if (state !== "RUNNING") {
+      // Vehicle is no longer running (watchdog timeout elsewhere, or STOP
+      // issued from another client) - nothing left to keep alive.
+      stopDriveHeartbeat();
+      showControlResult("차량이 정지 상태입니다.", "error");
+    } else {
+      showControlResult("정지는 throttle을 즉시 0으로 만듭니다.", "");
+    }
   } catch (_) {
-    stopDriveHeartbeat();
-    showControlResult("차량 연결이 끊겼습니다. 차량 측 watchdog이 자동 정지합니다.", "error");
+    // A single failed ping does not mean the vehicle has stopped: the
+    // server-side watchdog only stops it after DASHBOARD_HEARTBEAT_TIMEOUT_S
+    // (1.5s) of missed heartbeats, several ticks away at this 500ms
+    // interval. Keep retrying instead of giving up on one hiccup; the
+    // next successful response will report the vehicle's real state.
+    showControlResult("통신 재시도 중... 계속 끊기면 watchdog이 자동 정지합니다.", "error");
   }
 }
 
