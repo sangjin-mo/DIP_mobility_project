@@ -1,0 +1,16 @@
+# 라즈베리파이(aarch64)에서는 아래 순서로 설치할 것 — design/README.md §7 하드웨어 검증 참고
+#
+# 1) torch, torchvision을 PyTorch 공식 CPU 인덱스에서 먼저 설치 (버전이 서로 맞는 쌍으로 받아짐)
+#    python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --break-system-packages
+#    ⚠️ 이 단계 없이 바로 `pip install ultralytics`부터 하면:
+#       - torch가 불필요한 NVIDIA CUDA 패키지(GB 단위)까지 같이 받으려다 타임아웃/실패할 수 있음 (Pi는 NVIDIA GPU 없음)
+#       - 또는 torch/torchvision 버전이 서로 안 맞아 `RuntimeError: operator torchvision::nms does not exist`로 크래시함
+#
+# 2) 나머지 설치
+#    python3 -m pip install -r requirements.txt --break-system-packages
+
+ultralytics
+opencv-python
+gpiozero
+fastapi
+uvicorn
