@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, Field
@@ -23,11 +23,17 @@ from web_dashboard.services.control_service import (
     DriveCommand,
     RoverControlService,
 )
+from web_dashboard.services.crop_report_service import CropReportService
 from web_dashboard.services.live_service import LiveStateService
 from web_dashboard.services.report_service import (
     InvalidReportError,
     ReportNotFoundError,
     ReportService,
+)
+from web_dashboard.services.vision_service import (
+    VisionCaptureService,
+    VisionResponseError,
+    VisionUnavailableError,
 )
 from web_dashboard.services.weather_service import KmaWeatherService, WeatherUnavailableError
 
@@ -45,6 +51,7 @@ def create_app(
     ai_config = ai_settings or get_settings()
     web_config = dashboard_settings or get_dashboard_settings()
     reports = ReportService(ai_config.REPORT_ROOT)
+    crop_reports = CropReportService(reports)
     live = LiveStateService(ai_config.sqlite_path, web_config.TELEMETRY_STALE_AFTER_S)
     control = RoverControlService(
         web_config.ROVER_CONTROL_URL,
@@ -58,6 +65,11 @@ def create_app(
         location_label=web_config.WEATHER_LOCATION_LABEL,
         refresh_interval_minutes=web_config.WEATHER_REFRESH_INTERVAL_MINUTES,
         timeout_s=web_config.WEATHER_TIMEOUT_S,
+    )
+    vision = VisionCaptureService(
+        web_config.VISION_SERVER_URL,
+        timeout_s=web_config.VISION_TIMEOUT_S,
+        max_image_bytes=web_config.VISION_MAX_IMAGE_BYTES,
     )
 
     templates = Environment(
@@ -80,7 +92,8 @@ def create_app(
             "data_root": str(ai_config.DATA_ROOT),
             "report_root": str(ai_config.REPORT_ROOT),
             "database_exists": ai_config.sqlite_path.is_file(),
-            "camera_configured": bool(web_config.CAMERA_URL),
+            "camera_configured": vision.configured or bool(web_config.CAMERA_URL),
+            "vision_capture_configured": vision.configured,
             "control_configured": control.configured,
             "weather_configured": weather.configured,
             "weather_refresh_interval_s": web_config.WEATHER_REFRESH_INTERVAL_MINUTES * 60,
@@ -127,6 +140,38 @@ def create_app(
     @app.post("/api/control/heartbeat")
     async def heartbeat_rover() -> dict:
         return await _control_call(control, DriveCommand.HEARTBEAT)
+
+    @app.get("/api/camera/latest")
+    async def latest_camera_image() -> dict:
+        try:
+            latest = await asyncio.to_thread(vision.latest)
+        except (VisionUnavailableError, VisionResponseError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"available": latest is not None, "image": latest}
+
+    @app.post("/api/camera/capture")
+    async def capture_camera_image() -> dict:
+        try:
+            latest = await asyncio.to_thread(vision.capture)
+        except VisionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VisionResponseError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"captured": True, "image": latest}
+
+    @app.get("/api/camera/latest-image")
+    async def latest_camera_image_bytes() -> Response:
+        try:
+            data, content_type = await asyncio.to_thread(vision.latest_image)
+        except VisionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VisionResponseError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return Response(content=data, media_type=content_type, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/crop-report/latest")
+    async def latest_crop_report() -> dict:
+        return await asyncio.to_thread(crop_reports.latest)
 
     @app.get("/api/patrols")
     async def patrols() -> list[dict]:

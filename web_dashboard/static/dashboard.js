@@ -2,6 +2,7 @@ const byId = (id) => document.getElementById(id);
 
 let controlConfigured = false;
 let controlBusy = false;
+let visionCaptureConfigured = false;
 let driveHeartbeatActive = false;
 let driveHeartbeatTimer = null;
 let weatherRefreshTimer = null;
@@ -49,6 +50,7 @@ async function loadControlStatus() {
     const response = await fetch("/api/status");
     const status = await response.json();
     controlConfigured = Boolean(status.control_configured);
+    visionCaptureConfigured = Boolean(status.vision_capture_configured);
     scheduleWeatherRefresh(Number(status.weather_refresh_interval_s ?? 1800));
 
     const cameraStatus = byId("camera-status");
@@ -56,8 +58,11 @@ async function loadControlStatus() {
     cameraStatus.className = `status-pill ${status.camera_configured ? "success" : "neutral"}`;
     byId("capture-image").disabled = !status.camera_configured;
     byId("capture-result").textContent = status.camera_configured
-      ? "촬영 버튼을 누르면 최신 정지 이미지를 다시 불러옵니다."
-      : "비전팀 촬영 API 연동 대기 중입니다.";
+      ? visionCaptureConfigured
+        ? "촬영 버튼을 누르면 웹캠 Pi의 최신 정지 이미지를 전송받습니다."
+        : "촬영 버튼을 누르면 설정된 정지 이미지를 다시 불러옵니다."
+      : "";
+    if (visionCaptureConfigured) loadLatestStillImage();
 
     const controlStatus = byId("control-status");
     controlStatus.textContent = controlConfigured ? "제어 가능" : "API 미설정";
@@ -111,7 +116,7 @@ async function loadWeather(forceRefresh = false) {
     status.className = weather.is_stale ? "muted warning" : "muted success-text";
     byId("weather-source").textContent = weather.is_stale
       ? `마지막 정상 관측값 표시 중 · ${weather.error || "기상청 API 응답 지연"}`
-      : `${weather.location || "위치 미설정"} · ${weather.source} · ${Math.round(weatherRefreshIntervalSeconds / 60)}분마다 자동 갱신`;
+      : weather.location || "";
   } catch (error) {
     status.textContent = "설정 또는 연결 확인 필요";
     status.className = "muted warning";
@@ -167,13 +172,116 @@ async function sendDriveHeartbeat() {
   }
 }
 
-function refreshStillImage() {
+function showStillImage(url) {
   const image = byId("camera-image");
-  if (!image) return;
-  const url = new URL(image.src);
-  url.searchParams.set("captured_at", Date.now());
-  image.src = url.toString();
-  byId("capture-result").textContent = "최신 정지 이미지를 요청했습니다.";
+  const refreshedUrl = new URL(url, window.location.href);
+  refreshedUrl.searchParams.set("captured_at", Date.now());
+  image.src = refreshedUrl.toString();
+  byId("camera-still").hidden = false;
+  byId("camera-placeholder").hidden = true;
+}
+
+async function loadLatestStillImage() {
+  try {
+    const response = await fetch("/api/camera/latest");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    if (result.available) {
+      showStillImage(result.image.image_url);
+      byId("capture-result").textContent = `최근 전송 이미지: ${result.image.filename || "파일명 없음"}`;
+    }
+  } catch (error) {
+    byId("capture-result").textContent = `최근 이미지 확인 실패: ${error.message}`;
+  }
+}
+
+async function refreshStillImage() {
+  const button = byId("capture-image");
+  button.disabled = true;
+  byId("capture-result").textContent = "웹캠 이미지 전송을 요청하고 있습니다.";
+  try {
+    if (!visionCaptureConfigured) {
+      const image = byId("camera-image");
+      if (!image.src) throw new Error("촬영 API가 설정되지 않았습니다.");
+      showStillImage(image.src);
+      byId("capture-result").textContent = "최신 정지 이미지를 다시 불러왔습니다.";
+      return;
+    }
+    const response = await fetch("/api/camera/capture", { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    showStillImage(result.image.image_url);
+    const transfer = result.image.transfer || {};
+    byId("capture-result").textContent = transfer.requested === 0
+      ? `새 전송 대상이 없어 기존 최신 이미지를 표시합니다: ${result.image.filename || "파일명 없음"}`
+      : `촬영 이미지 수신 완료: ${result.image.filename || "파일명 없음"}`;
+  } catch (error) {
+    byId("capture-result").textContent = `촬영 실패: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function observationSummary(observations) {
+  const rows = [];
+  Object.entries(observations || {}).forEach(([crop, states]) => {
+    const counts = Object.entries(states || {}).map(([state, count]) => `${state} ${count}`).join(", ");
+    rows.push(`${crop}: ${counts || "관측 없음"}`);
+  });
+  return rows.join(" · ") || "관측 데이터 없음";
+}
+
+async function loadCropReport() {
+  const button = byId("refresh-report");
+  const status = byId("crop-report-status");
+  button.disabled = true;
+  status.textContent = "불러오는 중";
+  try {
+    const response = await fetch("/api/crop-report/latest");
+    const report = await response.json();
+    if (!response.ok) throw new Error(report.detail || `HTTP ${response.status}`);
+    const grid = byId("crop-grid");
+    grid.replaceChildren();
+    if (!report.available) {
+      const empty = document.createElement("article");
+      empty.className = "crop-card crop-empty";
+      empty.textContent = "AI/LLM 파이프라인에서 생성된 레포트가 없습니다.";
+      grid.appendChild(empty);
+      byId("llm-report").textContent = "생성된 레포트가 없습니다.";
+      byId("report-generated-at").textContent = "—";
+      status.textContent = "레포트 없음";
+      status.className = "status-pill neutral";
+      return;
+    }
+    report.zones.forEach((zone) => {
+      const card = document.createElement("article");
+      card.className = "crop-card";
+      const title = document.createElement("div");
+      title.className = "crop-title";
+      const name = document.createElement("strong");
+      name.textContent = `${zone.label}구역 · ${zone.zone_name || `구역 ${zone.zone_id}`}`;
+      const state = document.createElement("span");
+      state.className = "crop-state";
+      state.textContent = zone.status || "판정 전";
+      title.append(name, state);
+      const summary = document.createElement("p");
+      summary.className = "crop-observations";
+      summary.textContent = observationSummary(zone.observations);
+      card.append(title, summary);
+      grid.appendChild(card);
+    });
+    byId("llm-report").textContent = report.report_markdown || "레포트 본문이 없습니다.";
+    byId("report-generated-at").textContent = report.generated_at
+      ? new Date(report.generated_at).toLocaleString("ko-KR") : report.patrol_id;
+    status.textContent = report.llm_enabled ? "LLM 레포트" : "규칙 기반 레포트";
+    status.className = "status-pill success";
+  } catch (error) {
+    status.textContent = "조회 실패";
+    status.className = "status-pill neutral";
+    byId("llm-report").textContent = `레포트 조회 실패: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function showDashboardSlide(index) {
@@ -191,15 +299,11 @@ function showDashboardSlide(index) {
 function toggleWorkAction(button) {
   const isActive = button.getAttribute("aria-pressed") === "true";
   button.setAttribute("aria-pressed", String(!isActive));
-  const activeActions = [...document.querySelectorAll(".work-toggle[aria-pressed='true']")]
-    .map((item) => item.textContent.trim().replace(/^\S+\s*/, ""));
-  byId("work-toggle-result").textContent = activeActions.length
-    ? `화면 선택: ${activeActions.join(", ")} · 실제 장치 명령은 전송하지 않습니다.`
-    : "화면 표시용 토글이며 실제 장치와 연결되지 않습니다.";
 }
 
 byId("refresh-weather").addEventListener("click", () => loadWeather(true));
 byId("capture-image").addEventListener("click", refreshStillImage);
+byId("refresh-report").addEventListener("click", loadCropReport);
 byId("start-drive").addEventListener("click", () => sendControl("start"));
 byId("stop-drive").addEventListener("click", () => sendControl("stop"));
 byId("previous-slide").addEventListener("click", () => showDashboardSlide(currentSlideIndex - 1));
@@ -214,3 +318,4 @@ document.addEventListener("keydown", (event) => {
 showDashboardSlide(0);
 loadControlStatus();
 loadWeather();
+loadCropReport();

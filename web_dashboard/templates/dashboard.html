@@ -25,17 +25,13 @@
           <div><p class="section-kicker">01 · CAMERA</p><h2>카메라 촬영</h2></div>
           <span id="camera-status" class="status-pill neutral">미연결</span>
         </div>
-        {% if camera_url %}
-        <div class="camera-still"><img id="camera-image" src="{{ camera_url }}" alt="최근 촬영 이미지"></div>
-        {% else %}
-        <div class="camera-placeholder">
+        <div id="camera-still" class="camera-still"{% if not camera_url %} hidden{% endif %}><img id="camera-image"{% if camera_url %} src="{{ camera_url }}"{% endif %} alt="최근 촬영 이미지"></div>
+        <div id="camera-placeholder" class="camera-placeholder"{% if camera_url %} hidden{% endif %}>
           <div class="camera-illustration" aria-hidden="true"><span>🌿</span><span>🌱</span><span>🌿</span><i></i></div>
           <strong>촬영 이미지 대기</strong>
-          <p>스트리밍하지 않습니다. 비전팀의 촬영 API가 준비되면 버튼을 눌렀을 때 정지 이미지만 표시합니다.</p>
         </div>
-        {% endif %}
         <button id="capture-image" class="capture-button" type="button" disabled>📷 이미지 촬영</button>
-        <p id="capture-result" class="notice" role="status">비전팀 촬영 API 연동 대기 중입니다.</p>
+        <p id="capture-result" class="notice" role="status"></p>
       </article>
 
       <article class="panel weather-panel dashboard-slide" data-dashboard-slide aria-label="2 / 4 기상 정보" hidden>
@@ -71,32 +67,13 @@
       <article class="panel crop-report-panel dashboard-slide" data-dashboard-slide aria-label="3 / 4 작물 상태 레포트" hidden>
         <div class="panel-heading">
           <div><p class="section-kicker">03 · CROP REPORT</p><h2>구역별 작물 상태 레포트</h2></div>
-          <span class="status-pill neutral">비전 연동 대기</span>
+          <div class="report-heading-actions"><span id="crop-report-status" class="status-pill neutral">레포트 확인 중</span><button id="refresh-report" class="secondary" type="button">↻ 새로고침</button></div>
         </div>
-        <div class="crop-grid">
-          <article class="crop-card">
-            <div class="crop-title"><strong>A구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div>
-            <div class="crop-body">
-              <span class="crop-emoji" aria-hidden="true">🌱</span>
-              <dl class="crop-report-lines">
-                <div><dt>작물</dt><dd>비전 결과 대기</dd></div>
-                <div><dt>상태</dt><dd>판정 전</dd></div>
-                <div><dt>조치</dt><dd>분석 완료 후 안내합니다.</dd></div>
-              </dl>
-            </div>
-          </article>
-          <article class="crop-card">
-            <div class="crop-title"><strong>B구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div>
-            <div class="crop-body">
-              <span class="crop-emoji" aria-hidden="true">🌿</span>
-              <dl class="crop-report-lines">
-                <div><dt>작물</dt><dd>비전 결과 대기</dd></div>
-                <div><dt>상태</dt><dd>판정 전</dd></div>
-                <div><dt>조치</dt><dd>분석 완료 후 안내합니다.</dd></div>
-              </dl>
-            </div>
-          </article>
+        <div id="crop-grid" class="crop-grid">
+          <article class="crop-card"><div class="crop-title"><strong>A구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
+          <article class="crop-card"><div class="crop-title"><strong>B구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
         </div>
+        <div class="llm-report-wrap"><div class="llm-report-title"><strong>LLM 종합 레포트</strong><span id="report-generated-at">—</span></div><pre id="llm-report">생성된 레포트가 없습니다.</pre></div>
       </article>
 
       <article class="panel controls-panel dashboard-slide" data-dashboard-slide aria-label="4 / 4 차량 제어" hidden>
@@ -105,7 +82,6 @@
           <span id="control-status" class="status-pill neutral">API 확인 중</span>
         </div>
         <div class="control-hero" aria-hidden="true">🚜</div>
-        <p class="control-description">설정된 기본 속도로 운행을 시작하거나 즉시 정지합니다.</p>
         <div class="controls">
           <button id="start-drive" class="start-button" disabled>▶ 운행</button>
           <button id="stop-drive" class="stop-button" disabled>■ 정지</button>
@@ -118,9 +94,7 @@
             <button id="toggle-pest-control" class="work-toggle pest-control" type="button" aria-pressed="false">🛡 방제</button>
             <button id="toggle-watering" class="work-toggle watering" type="button" aria-pressed="false">💧 급수</button>
           </div>
-          <p id="work-toggle-result" class="notice" role="status">화면 표시용 토글이며 실제 장치와 연결되지 않습니다.</p>
         </section>
-        <p class="safety-note">운행 중 대시보드 연결이 끊기면 차량 측 watchdog이 자동으로 정지합니다.</p>
       </article>
     </section>
     <nav class="carousel-controls" aria-label="대시보드 화면 이동">

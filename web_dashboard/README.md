@@ -23,7 +23,9 @@ pipeline are not duplicated here.
 - one responsive HTML/CSS/JavaScript dashboard
 - latest telemetry and event over `/ws/live`
 - patrol list, metadata, Markdown, and selected-image APIs
-- camera placeholder, enabled by `DASHBOARD_CAMERA_URL`
+- webcam still-image transfer through the existing VIS server, enabled by
+  `DASHBOARD_VISION_SERVER_URL` (legacy direct image URLs remain supported)
+- latest zone metadata and LLM Markdown report on the crop report screen
 - drive status plus start and immediate-stop commands forwarded to a
   separately configured Raspberry Pi control agent
 - KMA ultra-short observation/forecast weather over `/api/weather`, cached so
@@ -51,6 +53,8 @@ Optional `.env` values:
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=8080
 DASHBOARD_CAMERA_URL=http://raspberry-pi.local:8889/cam
+DASHBOARD_VISION_SERVER_URL=http://127.0.0.1:8000
+DASHBOARD_VISION_TIMEOUT_S=35
 DASHBOARD_LIVE_POLL_INTERVAL_S=1.0
 DASHBOARD_TELEMETRY_STALE_AFTER_S=3.0
 DASHBOARD_ROVER_CONTROL_URL=http://raspberry-pi.local:9200/api/control
@@ -133,3 +137,5 @@ python -m pytest -q web_dashboard/tests
 ```
 
 See [SEQUENCE.md](SEQUENCE.md) for integration boundaries and runtime flows.
+For the two-Raspberry-Pi deployment order and required addresses, see
+[INTEGRATION_RUNBOOK.md](INTEGRATION_RUNBOOK.md).

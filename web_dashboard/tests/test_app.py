@@ -67,7 +67,6 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
         "toggle-harvest",
         "toggle-pest-control",
         "toggle-watering",
-        "work-toggle-result",
         "previous-slide",
         "current-slide",
         "total-slides",
@@ -77,6 +76,9 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
         "rain-advice",
         "temperature-advice",
         "weather-fetched-at",
+        "refresh-report",
+        "crop-report-status",
+        "llm-report",
     ):
         assert f'id="{element_id}"' in html
     assert "순찰 구역 맵" not in html
@@ -87,11 +89,46 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
     assert html.count("data-dashboard-slide") == 4
     assert "1 / 4 카메라 촬영" in html
     assert "4 / 4 차량 제어" in html
-    assert "분석 완료 후 안내합니다." in html
+    assert "분석 완료 후 안내합니다." not in html
     assert "기상 상황 안내 기준" not in html
     assert "농작물 상태별 조치 기준" not in html
     assert "저장된 순찰 레포트" not in html
-    assert "화면 표시용 토글이며 실제 장치와 연결되지 않습니다." in html
+    assert "화면 표시용 토글이며 실제 장치와 연결되지 않습니다." not in html
+    assert "스트리밍하지 않습니다." not in html
+    assert "설정된 기본 속도로 운행을 시작하거나 즉시 정지합니다." not in html
+    assert "watchdog이 자동으로 정지합니다." not in html
+
+
+def test_camera_and_crop_report_adapter_routes_are_exposed(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(VISION_SERVER_URL="http://vision.local:8000"),
+    )
+    latest = {
+        "filename": "crop.jpg",
+        "day": "2026-08-21",
+        "rel_path": "2026-08-21/crop.jpg",
+        "image_url": "/api/camera/latest-image",
+    }
+
+    with (
+        patch("web_dashboard.app.VisionCaptureService.latest", return_value=latest),
+        patch("web_dashboard.app.VisionCaptureService.capture", return_value=latest),
+        TestClient(app) as client,
+    ):
+        status = client.get("/api/status").json()
+        camera = client.post("/api/camera/capture")
+        report = client.get("/api/crop-report/latest")
+
+    assert status["camera_configured"] is True
+    assert status["vision_capture_configured"] is True
+    assert camera.status_code == 200
+    assert camera.json()["image"]["filename"] == "crop.jpg"
+    assert report.json()["available"] is False
 
 
 def test_control_api_is_disabled_until_rover_url_is_configured(tmp_path):
