@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -85,10 +87,12 @@ class KmaWeatherService:
                     # POP belongs to the village forecast endpoint. A temporary
                     # failure there must not hide otherwise valid observations.
                     pass
+                hourly_history = self._hourly_history(observation_base, observations)
                 result = self._normalise(
                     observations,
                     forecasts,
                     probability_forecasts,
+                    hourly_history,
                     observation_base,
                     now,
                 )
@@ -145,6 +149,7 @@ class KmaWeatherService:
         observations: list[dict[str, Any]],
         forecasts: list[dict[str, Any]],
         probability_forecasts: list[dict[str, Any]],
+        hourly_history: list[dict[str, Any]],
         observation_base: datetime,
         fetched_at: datetime,
     ) -> dict[str, Any]:
@@ -184,6 +189,7 @@ class KmaWeatherService:
             "is_raining": is_raining,
             "precipitation_mm": precipitation,
             "rain_probability_percent": _as_float(probability_forecast.get("POP")),
+            "hourly_history": hourly_history,
             "wind_speed_mps": wind_speed,
             "observed_at": observation_base.isoformat(),
             "fetched_at": fetched_at.isoformat(),
@@ -192,6 +198,36 @@ class KmaWeatherService:
             "grid": {"nx": self._nx, "ny": self._ny},
             "is_stale": False,
         }
+
+    def _hourly_history(
+        self,
+        latest_at: datetime,
+        latest_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Fetch and normalise hourly observations from 23 hours ago to now."""
+        slots = [latest_at - timedelta(hours=offset) for offset in range(23, -1, -1)]
+        observations_by_time = {latest_at: latest_items}
+        previous_slots = slots[:-1]
+
+        # The endpoint accepts one base time per request. Parallel requests
+        # keep the initial dashboard load bounded by a few request timeouts.
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {
+                executor.submit(self._request, "getUltraSrtNcst", slot): slot
+                for slot in previous_slots
+            }
+            for future in as_completed(futures):
+                slot = futures[future]
+                try:
+                    observations_by_time[slot] = future.result()
+                except (WeatherDataError, urllib.error.URLError, TimeoutError, OSError):
+                    continue
+
+        return [
+            _normalise_history_point(slot, observations_by_time[slot])
+            for slot in slots
+            if slot in observations_by_time
+        ]
 
 
 def _observation_base(now: datetime) -> datetime:
@@ -242,6 +278,36 @@ def _nearest_forecast(
     future = [timestamp for timestamp in grouped if timestamp >= now]
     selected = min(future) if future else max(grouped)
     return grouped[selected]
+
+
+def _normalise_history_point(
+    observed_at: datetime, items: list[dict[str, Any]]
+) -> dict[str, Any]:
+    values = {
+        str(item.get("category")): item.get("obsrValue")
+        for item in items
+        if item.get("category")
+    }
+    precipitation_raw = values.get("RN1")
+    return {
+        "observed_at": observed_at.isoformat(),
+        "temperature_c": _as_float(values.get("T1H")),
+        "precipitation_mm": _observed_precipitation_mm(precipitation_raw),
+        "precipitation_label": precipitation_raw,
+    }
+
+
+def _observed_precipitation_mm(value: Any) -> float | None:
+    numeric = _as_float(value)
+    if numeric is not None:
+        return numeric
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text in {"강수없음", "없음"}:
+        return 0.0
+    numbers = re.findall(r"\d+(?:\.\d+)?", text)
+    return float(numbers[0]) if numbers else None
 
 
 def _as_float(value: Any) -> float | None:

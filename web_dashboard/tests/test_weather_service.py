@@ -49,8 +49,21 @@ def forecast_items() -> list[dict]:
 
 def village_forecast_items() -> list[dict]:
     return [
+        {"category": "TMP", "fcstDate": "20260820", "fcstTime": "1500", "fcstValue": "29"},
+        {"category": "PCP", "fcstDate": "20260820", "fcstTime": "1500", "fcstValue": "강수없음"},
         {"category": "POP", "fcstDate": "20260820", "fcstTime": "1500", "fcstValue": "60"},
+        {"category": "TMP", "fcstDate": "20260820", "fcstTime": "1600", "fcstValue": "30"},
+        {"category": "PCP", "fcstDate": "20260820", "fcstTime": "1600", "fcstValue": "1.0mm 미만"},
         {"category": "POP", "fcstDate": "20260820", "fcstTime": "1600", "fcstValue": "70"},
+    ]
+
+
+def successful_weather_responses() -> list[FakeResponse]:
+    return [
+        FakeResponse(observation_items()),
+        FakeResponse(forecast_items()),
+        FakeResponse(village_forecast_items()),
+        *[FakeResponse(observation_items()) for _ in range(23)],
     ]
 
 
@@ -69,11 +82,7 @@ def test_fetches_observation_and_forecast_then_normalises_dashboard_shape():
 
     with patch(
         "web_dashboard.services.weather_service.urllib.request.urlopen",
-        side_effect=[
-            FakeResponse(observation_items()),
-            FakeResponse(forecast_items()),
-            FakeResponse(village_forecast_items()),
-        ],
+        side_effect=successful_weather_responses(),
     ) as urlopen:
         result = service.get()
 
@@ -92,6 +101,14 @@ def test_fetches_observation_and_forecast_then_normalises_dashboard_shape():
     assert result["humidity_percent"] == 68.0
     assert result["precipitation_mm"] == 0.8
     assert result["rain_probability_percent"] == 60.0
+    assert len(result["hourly_history"]) == 24
+    assert result["hourly_history"][0] == {
+        "observed_at": "2026-08-19T15:00:00+09:00",
+        "temperature_c": 27.3,
+        "precipitation_mm": 0.8,
+        "precipitation_label": "0.8",
+    }
+    assert result["hourly_history"][-1]["observed_at"] == "2026-08-20T14:00:00+09:00"
     assert result["wind_speed_mps"] == 2.1
     assert result["weather"] == "비"
     assert result["weather_icon"] == "rain"
@@ -107,11 +124,7 @@ def test_encoded_service_key_is_not_double_encoded():
 
     with patch(
         "web_dashboard.services.weather_service.urllib.request.urlopen",
-        side_effect=[
-            FakeResponse(observation_items()),
-            FakeResponse(forecast_items()),
-            FakeResponse(village_forecast_items()),
-        ],
+        side_effect=successful_weather_responses(),
     ) as urlopen:
         service.get()
 
@@ -125,17 +138,13 @@ def test_cache_prevents_repeated_external_calls():
 
     with patch(
         "web_dashboard.services.weather_service.urllib.request.urlopen",
-        side_effect=[
-            FakeResponse(observation_items()),
-            FakeResponse(forecast_items()),
-            FakeResponse(village_forecast_items()),
-        ],
+        side_effect=successful_weather_responses(),
     ) as urlopen:
         first = service.get()
         second = service.get()
 
     assert first == second
-    assert urlopen.call_count == 3
+    assert urlopen.call_count == 26
 
 
 def test_force_refresh_bypasses_cache():
@@ -144,19 +153,12 @@ def test_force_refresh_bypasses_cache():
 
     with patch(
         "web_dashboard.services.weather_service.urllib.request.urlopen",
-        side_effect=[
-            FakeResponse(observation_items()),
-            FakeResponse(forecast_items()),
-            FakeResponse(village_forecast_items()),
-            FakeResponse(observation_items()),
-            FakeResponse(forecast_items()),
-            FakeResponse(village_forecast_items()),
-        ],
+        side_effect=successful_weather_responses() + successful_weather_responses(),
     ) as urlopen:
         service.get()
         service.get(force_refresh=True)
 
-    assert urlopen.call_count == 6
+    assert urlopen.call_count == 52
 
 
 def test_returns_stale_cache_when_kma_is_temporarily_unavailable():
@@ -171,11 +173,7 @@ def test_returns_stale_cache_when_kma_is_temporarily_unavailable():
 
     with patch(
         "web_dashboard.services.weather_service.urllib.request.urlopen",
-        side_effect=[
-            FakeResponse(observation_items()),
-            FakeResponse(forecast_items()),
-            FakeResponse(village_forecast_items()),
-        ],
+        side_effect=successful_weather_responses(),
     ):
         service.get()
 
@@ -200,6 +198,7 @@ def test_probability_failure_keeps_current_weather_available():
             FakeResponse(observation_items()),
             FakeResponse(forecast_items()),
             urllib.error.URLError("forecast offline"),
+            *[FakeResponse(observation_items()) for _ in range(23)],
         ],
     ):
         result = service.get()

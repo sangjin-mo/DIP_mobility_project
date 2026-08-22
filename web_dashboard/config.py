@@ -33,9 +33,12 @@ class DashboardSettings(BaseSettings):
     # Raspberry Pi control agent. This must point at the agent's command
     # endpoint, for example http://192.168.0.42:9200/api/control.
     ROVER_CONTROL_URL: str | None = None
+    # Optional override. By default /api/status is derived from CONTROL_URL.
+    ROVER_STATUS_URL: str | None = None
     ROVER_CONTROL_TOKEN: str | None = None
     CONTROL_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
     DEFAULT_TARGET_SPEED_MPS: float = Field(default=0.25, gt=0, le=1.0)
+    MAX_TARGET_SPEED_MPS: float = Field(default=0.50, gt=0, le=1.0)
 
     # KMA Village Forecast API. Both encoded and decoded data.go.kr keys are
     # accepted. A fixed farm only needs its grid coordinates configured once;

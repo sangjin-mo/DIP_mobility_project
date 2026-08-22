@@ -57,6 +57,7 @@ def create_app(
         web_config.ROVER_CONTROL_URL,
         timeout_s=web_config.CONTROL_TIMEOUT_S,
         token=web_config.ROVER_CONTROL_TOKEN,
+        status_url=web_config.ROVER_STATUS_URL,
     )
     weather = KmaWeatherService(
         web_config.KMA_SERVICE_KEY,
@@ -98,6 +99,7 @@ def create_app(
             "weather_configured": weather.configured,
             "weather_refresh_interval_s": web_config.WEATHER_REFRESH_INTERVAL_MINUTES * 60,
             "default_target_speed_mps": web_config.DEFAULT_TARGET_SPEED_MPS,
+            "max_target_speed_mps": web_config.MAX_TARGET_SPEED_MPS,
         }
 
     @app.get("/api/weather")
@@ -131,6 +133,11 @@ def create_app(
     @app.post("/api/control/start")
     async def start_rover(request: StartRequest) -> dict:
         speed = request.target_speed_mps or web_config.DEFAULT_TARGET_SPEED_MPS
+        if speed > web_config.MAX_TARGET_SPEED_MPS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"목표 속도는 {web_config.MAX_TARGET_SPEED_MPS:.2f} m/s 이하여야 합니다.",
+            )
         return await _control_call(control, DriveCommand.START, speed)
 
     @app.post("/api/control/stop")
@@ -140,6 +147,15 @@ def create_app(
     @app.post("/api/control/heartbeat")
     async def heartbeat_rover() -> dict:
         return await _control_call(control, DriveCommand.HEARTBEAT)
+
+    @app.get("/api/control/status")
+    async def rover_status() -> dict:
+        try:
+            return await asyncio.to_thread(control.status)
+        except ControlUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ControlCommandError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/camera/latest")
     async def latest_camera_image() -> dict:

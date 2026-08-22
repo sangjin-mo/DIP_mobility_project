@@ -1,7 +1,9 @@
 const byId = (id) => document.getElementById(id);
 
 let controlConfigured = false;
+let controlReachable = false;
 let controlBusy = false;
+let roverState = "UNKNOWN";
 let visionCaptureConfigured = false;
 let driveHeartbeatActive = false;
 let driveHeartbeatTimer = null;
@@ -34,9 +36,10 @@ function updateWeatherAdvice(weather) {
 }
 
 function setControlButtons() {
-  const enabled = controlConfigured && !controlBusy;
+  const enabled = controlConfigured && controlReachable && !controlBusy;
   byId("start-drive").disabled = !enabled;
   byId("stop-drive").disabled = !enabled;
+  byId("target-speed").disabled = !enabled;
 }
 
 function showControlResult(message, kind = "") {
@@ -51,6 +54,11 @@ async function loadControlStatus() {
     const status = await response.json();
     controlConfigured = Boolean(status.control_configured);
     visionCaptureConfigured = Boolean(status.vision_capture_configured);
+    const speedInput = byId("target-speed");
+    speedInput.max = Number(status.max_target_speed_mps ?? 0.5).toFixed(2);
+    speedInput.value = Number(status.default_target_speed_mps ?? 0.25).toFixed(2);
+    byId("target-speed-value").textContent = Number(speedInput.value).toFixed(2);
+    byId("target-speed-maximum").textContent = `${Number(speedInput.max).toFixed(2)} m/s`;
     scheduleWeatherRefresh(Number(status.weather_refresh_interval_s ?? 1800));
 
     const cameraStatus = byId("camera-status");
@@ -64,16 +72,57 @@ async function loadControlStatus() {
       : "";
     if (visionCaptureConfigured) loadLatestStillImage();
 
-    const controlStatus = byId("control-status");
-    controlStatus.textContent = controlConfigured ? "제어 가능" : "API 미설정";
-    controlStatus.className = `status-pill ${controlConfigured ? "success" : "neutral"}`;
-    showControlResult(controlConfigured
-      ? "차량 명령을 보낼 수 있습니다."
-      : "DASHBOARD_ROVER_CONTROL_URL을 설정하면 버튼이 활성화됩니다.");
+    if (controlConfigured) {
+      await loadRoverStatus();
+    } else {
+      controlReachable = false;
+      byId("control-status").textContent = "API 미설정";
+      byId("control-status").className = "status-pill neutral";
+      showControlResult("");
+    }
   } catch (_) {
     controlConfigured = false;
+    controlReachable = false;
     byId("control-status").textContent = "API 확인 실패";
     showControlResult("대시보드 서버의 제어 상태를 확인하지 못했습니다.", "error");
+  }
+  setControlButtons();
+}
+
+function applyRoverState(state, targetSpeed = null) {
+  roverState = state || "UNKNOWN";
+  const numericSpeed = Number(targetSpeed);
+  if (state === "RUNNING" && Number.isFinite(numericSpeed) && numericSpeed > 0) {
+    const speedInput = byId("target-speed");
+    speedInput.value = numericSpeed.toFixed(2);
+    byId("target-speed-value").textContent = numericSpeed.toFixed(2);
+  }
+  const status = byId("control-status");
+  if (state === "RUNNING") {
+    status.textContent = "운행 중";
+    status.className = "status-pill success";
+  } else if (state === "STOPPED") {
+    status.textContent = "정지";
+    status.className = "status-pill neutral";
+  } else {
+    status.textContent = state === "EMERGENCY" ? "비상 정지" : "상태 확인 필요";
+    status.className = "status-pill neutral";
+  }
+}
+
+async function loadRoverStatus() {
+  if (!controlConfigured || controlBusy) return;
+  try {
+    const response = await fetch("/api/control/status");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    controlReachable = Boolean(result.connected);
+    applyRoverState(result.state, result.target_speed_mps);
+    if (result.state !== "RUNNING" && driveHeartbeatActive) stopDriveHeartbeat();
+  } catch (_) {
+    controlReachable = false;
+    byId("control-status").textContent = "연결 끊김";
+    byId("control-status").className = "status-pill neutral";
   }
   setControlButtons();
 }
@@ -82,6 +131,151 @@ function scheduleWeatherRefresh(intervalSeconds) {
   if (weatherRefreshTimer !== null) clearInterval(weatherRefreshTimer);
   weatherRefreshIntervalSeconds = Math.max(60, intervalSeconds);
   weatherRefreshTimer = setInterval(loadWeather, weatherRefreshIntervalSeconds * 1000);
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function makeSvgElement(tag, attributes = {}, text = null) {
+  const element = document.createElementNS(SVG_NS, tag);
+  Object.entries(attributes).forEach(([name, value]) => element.setAttribute(name, String(value)));
+  if (text !== null) element.textContent = text;
+  return element;
+}
+
+function chartTimeLabel(isoValue) {
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return "—";
+  return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}시`;
+}
+
+function drawChartGrid(svg, minValue, maxValue, geometry, suffix) {
+  const { left, top, width, height } = geometry;
+  for (let index = 0; index <= 3; index += 1) {
+    const ratio = index / 3;
+    const y = top + height * ratio;
+    const value = maxValue - (maxValue - minValue) * ratio;
+    svg.appendChild(makeSvgElement("line", {
+      x1: left, y1: y, x2: left + width, y2: y, class: "chart-grid-line",
+    }));
+    svg.appendChild(makeSvgElement("text", {
+      x: left - 8, y: y + 4, "text-anchor": "end", class: "chart-axis-label",
+    }, `${value.toFixed(value % 1 === 0 ? 0 : 1)}${suffix}`));
+  }
+}
+
+function drawTimeLabels(svg, points, geometry) {
+  const { left, top, width, height } = geometry;
+  const denominator = Math.max(points.length - 1, 1);
+  const step = Math.max(1, Math.ceil(points.length / 8));
+  points.forEach((point, index) => {
+    if (index % step !== 0 && index !== points.length - 1) return;
+    const x = left + (index / denominator) * width;
+    svg.appendChild(makeSvgElement("text", {
+      x, y: top + height + 20, "text-anchor": "middle", class: "chart-axis-label",
+    }, chartTimeLabel(point.observed_at)));
+  });
+}
+
+function showEmptyChart(svg, message = "시간별 관측 데이터가 없습니다.") {
+  svg.replaceChildren(makeSvgElement("text", { x: 360, y: 100, class: "chart-empty" }, message));
+}
+
+function renderTemperatureChart(points) {
+  const svg = byId("temperature-chart");
+  const values = points.map((point) => Number(point.temperature_c));
+  const valid = values.filter(Number.isFinite);
+  if (!points.length || !valid.length) {
+    showEmptyChart(svg);
+    return;
+  }
+  svg.replaceChildren();
+  const geometry = { left: 48, top: 14, width: 654, height: 138 };
+  const rawMin = Math.min(...valid);
+  const rawMax = Math.max(...valid);
+  const padding = Math.max(1, (rawMax - rawMin) * 0.15);
+  const minValue = Math.floor(rawMin - padding);
+  const maxValue = Math.ceil(rawMax + padding);
+  const range = Math.max(maxValue - minValue, 1);
+  const denominator = Math.max(points.length - 1, 1);
+  const coordinates = points.map((point, index) => {
+    const value = Number(point.temperature_c);
+    if (!Number.isFinite(value)) return null;
+    return {
+      x: geometry.left + (index / denominator) * geometry.width,
+      y: geometry.top + ((maxValue - value) / range) * geometry.height,
+      value,
+      point,
+    };
+  }).filter(Boolean);
+
+  const defs = makeSvgElement("defs");
+  const gradient = makeSvgElement("linearGradient", {
+    id: "temperature-gradient", x1: "0", y1: "0", x2: "0", y2: "1",
+  });
+  gradient.append(
+    makeSvgElement("stop", { offset: "0%", "stop-color": "#f3a25c", "stop-opacity": ".32" }),
+    makeSvgElement("stop", { offset: "100%", "stop-color": "#f3a25c", "stop-opacity": "0" }),
+  );
+  defs.appendChild(gradient);
+  svg.appendChild(defs);
+  drawChartGrid(svg, minValue, maxValue, geometry, "℃");
+  drawTimeLabels(svg, points, geometry);
+
+  const linePath = coordinates.map((coordinate, index) =>
+    `${index === 0 ? "M" : "L"}${coordinate.x.toFixed(1)},${coordinate.y.toFixed(1)}`
+  ).join(" ");
+  if (coordinates.length > 1) {
+    const first = coordinates[0];
+    const last = coordinates[coordinates.length - 1];
+    const baseline = geometry.top + geometry.height;
+    svg.appendChild(makeSvgElement("path", {
+      d: `${linePath} L${last.x.toFixed(1)},${baseline} L${first.x.toFixed(1)},${baseline} Z`,
+      class: "temperature-area",
+    }));
+  }
+  svg.appendChild(makeSvgElement("path", { d: linePath, class: "temperature-line" }));
+  coordinates.forEach(({ x, y, value, point }) => {
+    const circle = makeSvgElement("circle", { cx: x, cy: y, r: 3.5, class: "temperature-point" });
+    circle.appendChild(makeSvgElement("title", {}, `${chartTimeLabel(point.observed_at)} · ${value.toFixed(1)}℃`));
+    svg.appendChild(circle);
+  });
+}
+
+function renderPrecipitationChart(points) {
+  const svg = byId("precipitation-chart");
+  const values = points.map((point) => Number(point.precipitation_mm));
+  const valid = values.filter(Number.isFinite);
+  if (!points.length || !valid.length) {
+    showEmptyChart(svg);
+    return;
+  }
+  svg.replaceChildren();
+  const geometry = { left: 48, top: 14, width: 654, height: 138 };
+  const maxValue = Math.max(1, Math.ceil(Math.max(...valid)));
+  const slotWidth = geometry.width / Math.max(points.length, 1);
+  const barWidth = Math.max(3, slotWidth * 0.62);
+  drawChartGrid(svg, 0, maxValue, geometry, "mm");
+  drawTimeLabels(svg, points, geometry);
+  points.forEach((point, index) => {
+    const value = Number(point.precipitation_mm);
+    if (!Number.isFinite(value)) return;
+    const height = value === 0 ? 2 : (value / maxValue) * geometry.height;
+    const x = geometry.left + index * slotWidth + (slotWidth - barWidth) / 2;
+    const y = geometry.top + geometry.height - height;
+    const bar = makeSvgElement("rect", {
+      x, y, width: barWidth, height,
+      class: value === 0 ? "precipitation-bar precipitation-zero" : "precipitation-bar",
+    });
+    const amountLabel = point.precipitation_label || `${value.toFixed(1)}mm`;
+    bar.appendChild(makeSvgElement("title", {}, `${chartTimeLabel(point.observed_at)} · ${amountLabel}`));
+    svg.appendChild(bar);
+  });
+}
+
+function renderWeatherCharts(points) {
+  const hourlyPoints = Array.isArray(points) ? points.slice(0, 24) : [];
+  renderTemperatureChart(hourlyPoints);
+  renderPrecipitationChart(hourlyPoints);
 }
 
 async function loadWeather(forceRefresh = false) {
@@ -106,6 +300,7 @@ async function loadWeather(forceRefresh = false) {
     byId("weather-precipitation").textContent = valueOrDash(weather.precipitation_mm, 1);
     byId("weather-wind").textContent = valueOrDash(weather.wind_speed_mps, 1);
     updateWeatherAdvice(weather);
+    renderWeatherCharts(weather.hourly_history);
     byId("weather-observed-at").textContent = new Date(weather.observed_at).toLocaleString("ko-KR", {
       month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
     });
@@ -118,6 +313,7 @@ async function loadWeather(forceRefresh = false) {
       ? `마지막 정상 관측값 표시 중 · ${weather.error || "기상청 API 응답 지연"}`
       : weather.location || "";
   } catch (error) {
+    renderWeatherCharts([]);
     status.textContent = "설정 또는 연결 확인 필요";
     status.className = "muted warning";
     byId("weather-source").textContent = error.message;
@@ -132,11 +328,18 @@ async function sendControl(command) {
   setControlButtons();
   showControlResult("차량 응답을 기다리는 중입니다.");
   const options = { method: "POST", headers: { "Content-Type": "application/json" } };
-  if (command === "start") options.body = JSON.stringify({});
+  if (command === "start") {
+    options.body = JSON.stringify({ target_speed_mps: Number(byId("target-speed").value) });
+  }
   try {
     const response = await fetch(`/api/control/${command}`, options);
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    controlReachable = true;
+    applyRoverState(
+      result.rover && result.rover.state,
+      result.rover && result.rover.target_speed_mps,
+    );
     showControlResult(`${command === "start" ? "운행" : "정지"} 명령이 차량에서 승인되었습니다.`, "success");
     if (command === "start") startDriveHeartbeat();
   } catch (error) {
@@ -172,9 +375,12 @@ async function sendDriveHeartbeat() {
       // Vehicle is no longer running (watchdog timeout elsewhere, or STOP
       // issued from another client) - nothing left to keep alive.
       stopDriveHeartbeat();
+      applyRoverState(state, result.rover && result.rover.target_speed_mps);
       showControlResult("차량이 정지 상태입니다.", "error");
     } else {
-      showControlResult("정지는 throttle을 즉시 0으로 만듭니다.", "");
+      controlReachable = true;
+      applyRoverState(state, result.rover && result.rover.target_speed_mps);
+      showControlResult("");
     }
   } catch (_) {
     // A single failed ping does not mean the vehicle has stopped: the
@@ -182,7 +388,7 @@ async function sendDriveHeartbeat() {
     // (1.5s) of missed heartbeats, several ticks away at this 500ms
     // interval. Keep retrying instead of giving up on one hiccup; the
     // next successful response will report the vehicle's real state.
-    showControlResult("통신 재시도 중... 계속 끊기면 watchdog이 자동 정지합니다.", "error");
+    showControlResult("통신 재시도 중", "error");
   }
 }
 
@@ -318,6 +524,12 @@ function toggleWorkAction(button) {
 byId("refresh-weather").addEventListener("click", () => loadWeather(true));
 byId("capture-image").addEventListener("click", refreshStillImage);
 byId("refresh-report").addEventListener("click", loadCropReport);
+byId("target-speed").addEventListener("input", (event) => {
+  byId("target-speed-value").textContent = Number(event.target.value).toFixed(2);
+});
+byId("target-speed").addEventListener("change", () => {
+  if (roverState === "RUNNING" && controlReachable && !controlBusy) sendControl("start");
+});
 byId("start-drive").addEventListener("click", () => sendControl("start"));
 byId("stop-drive").addEventListener("click", () => sendControl("stop"));
 byId("previous-slide").addEventListener("click", () => showDashboardSlide(currentSlideIndex - 1));
@@ -333,3 +545,4 @@ showDashboardSlide(0);
 loadControlStatus();
 loadWeather();
 loadCropReport();
+setInterval(loadRoverStatus, 2000);

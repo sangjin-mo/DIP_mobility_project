@@ -62,6 +62,16 @@
           <span>조회 <strong id="weather-fetched-at">—</strong></span>
         </div>
         <p id="weather-source" class="notice">외부 관측값이며 비닐하우스 내부 센서값이 아닙니다.</p>
+        <section class="weather-charts" aria-label="지난 24시간 시간별 기상 관측 그래프">
+          <article class="weather-chart-card">
+            <div class="weather-chart-heading"><strong>시간별 온도</strong><span>지난 24시간 · 1시간 단위</span></div>
+            <svg id="temperature-chart" class="weather-chart" viewBox="0 0 720 190" role="img" aria-label="지난 24시간 온도 관측 그래프"></svg>
+          </article>
+          <article class="weather-chart-card">
+            <div class="weather-chart-heading"><strong>시간별 강수량</strong><span>지난 24시간 · 1시간 단위</span></div>
+            <svg id="precipitation-chart" class="weather-chart" viewBox="0 0 720 190" role="img" aria-label="지난 24시간 강수량 관측 그래프"></svg>
+          </article>
+        </section>
       </article>
 
       <article class="panel crop-report-panel dashboard-slide" data-dashboard-slide aria-label="3 / 4 작물 상태 레포트" hidden>
@@ -82,6 +92,11 @@
           <span id="control-status" class="status-pill neutral">API 확인 중</span>
         </div>
         <div class="control-hero" aria-hidden="true">🚜</div>
+        <section class="speed-control" aria-labelledby="target-speed-label">
+          <div class="speed-control-heading"><span id="target-speed-label">목표 속도</span><strong><span id="target-speed-value">0.25</span> m/s</strong></div>
+          <input id="target-speed" type="range" min="0.05" max="0.50" step="0.05" value="0.25" disabled aria-label="차량 목표 속도">
+          <div class="speed-range-labels"><span>0.05</span><span id="target-speed-maximum">0.50 m/s</span></div>
+        </section>
         <div class="controls">
           <button id="start-drive" class="start-button" disabled>▶ 운행</button>
           <button id="stop-drive" class="stop-button" disabled>■ 정지</button>

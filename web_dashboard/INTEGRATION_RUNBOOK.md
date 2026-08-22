@@ -32,18 +32,27 @@ STOP API를 호출하지 않는다.
 
 ## 2. DonkeyCar Raspberry Pi
 
-구동 담당자가 현재 `drive/manage.py`와 `drive/dashboard_control.py`를 실행
-가능한 상태로 준비한다. 현재 구성은 학습 모델을 이용한 조향을 요구하므로 실제
-모델 경로를 지정해 DonkeyCar 루프를 시작해야 한다.
+구동 담당자가 실제 Pi의 `~/mycar`에 `dashboard_control.py`와 이를 연결한
+`manage.py`가 배포됐는지 확인한다. 실제 Pi 저장소에는 별도의 PWM 보정값이
+있으므로 WEB 담당자가 이 저장소의 `drive/config.py`를 통째로 덮어쓰면 안 된다.
+현재 구성은 학습 모델을 이용한 조향을 요구하므로 실제 모델 경로를 지정한다.
 
 ```bash
-cd drive
+cd ~/mycar
+export DASHBOARD_CONTROL_TOKEN='충분히-긴-공유-비밀값'
 python manage.py drive --model=models/mypilot.h5
 ```
 
 정상 시작 시 `:9200/api/control`이 열린다. 토큰, 최대 스로틀, 모델 경로,
 조향 보정은 구동 담당 영역이다. WEB은 이 파일들을 수정하거나 PWM/GPIO를 직접
 제어하지 않는다.
+
+Pi에서 IP와 상태 API를 확인한다.
+
+```bash
+hostname -I
+curl http://127.0.0.1:9200/api/status
+```
 
 ## 3. 웹캠 Raspberry Pi
 
@@ -93,6 +102,18 @@ DASHBOARD_VISION_SERVER_URL=http://127.0.0.1:8000
 DASHBOARD_ROVER_CONTROL_URL=http://DONKEY_PI_IP:9200/api/control
 DASHBOARD_ROVER_CONTROL_TOKEN=CONTROL_SECRET
 DASHBOARD_DEFAULT_TARGET_SPEED_MPS=0.25
+DASHBOARD_MAX_TARGET_SPEED_MPS=0.50
+```
+
+`DASHBOARD_MAX_TARGET_SPEED_MPS`는 Pi의 `DASHBOARD_MAX_SPEED_MPS`보다 크게
+설정하지 않는다. 슬라이더 값은 START 명령의 `target_speed_mps`로 전달되며,
+운행 중 슬라이더를 변경하면 갱신된 START 명령을 다시 전송한다.
+
+대시보드를 실행하기 전에 PC에서 Pi 연결을 확인한다.
+
+```powershell
+Test-NetConnection DONKEY_PI_IP -Port 9200
+Invoke-RestMethod http://DONKEY_PI_IP:9200/api/status
 ```
 
 실행한다.
