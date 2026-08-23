@@ -11,7 +11,6 @@ import json
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 import uuid
 
@@ -23,10 +22,12 @@ class VisionStateService:
         self,
         receiver_url: str | None,
         *,
+        capture_url: str | None = None,
         token: str | None = None,
         timeout_s: float = 2.0,
     ) -> None:
         self._receiver_url = receiver_url.strip() if receiver_url else None
+        self._capture_url = capture_url.rstrip("/") if capture_url else None
         self._token = token
         self._timeout_s = timeout_s
         self._last_state: str | None = None
@@ -36,6 +37,10 @@ class VisionStateService:
     @property
     def configured(self) -> bool:
         return bool(self._receiver_url)
+
+    @property
+    def capture_configured(self) -> bool:
+        return bool(self._capture_url)
 
     @property
     def last_result(self) -> dict | None:
@@ -111,16 +116,38 @@ class VisionStateService:
             self._last_result = result
             return dict(result)
 
+    def capture_now(self) -> dict:
+        return self._request_capture_api("/capture-now", method="POST")
+
     def capture_status(self) -> dict:
-        return self._request_capture_mode(method="GET")
+        result = self._request_capture_api("/interval", method="GET")
+        return {
+            "interval_s": result.get("interval_sec"),
+            "min_interval_s": result.get("min_interval_sec"),
+        }
 
-    def set_capture_mode(self, enabled: bool) -> dict:
-        return self._request_capture_mode(method="POST", payload={"enabled": enabled})
+    def set_capture_interval(self, interval_s: float) -> dict:
+        result = self._request_capture_api(
+            "/set-interval",
+            method="POST",
+            payload={"interval_sec": interval_s},
+        )
+        return {
+            "interval_s": result.get("interval_sec"),
+            "requested_s": result.get("requested_sec"),
+            "clamped": result.get("clamped", False),
+        }
 
-    def _request_capture_mode(self, *, method: str, payload: dict | None = None) -> dict:
-        if not self._receiver_url:
-            raise ConnectionError("비전 웹캠 Pi 상태 수신 주소가 설정되지 않았습니다.")
-        url = urllib.parse.urljoin(self._receiver_url, "capture-mode")
+    def _request_capture_api(
+        self,
+        path: str,
+        *,
+        method: str,
+        payload: dict | None = None,
+    ) -> dict:
+        if not self._capture_url:
+            raise ConnectionError("비전 웹캠 Pi 촬영 API 주소가 설정되지 않았습니다.")
+        url = f"{self._capture_url}{path}"
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         request = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
         try:
@@ -128,15 +155,16 @@ class VisionStateService:
                 raw = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"비전 Pi가 촬영 모드 요청을 거부했습니다: {detail}") from exc
+            raise RuntimeError(f"비전 Pi가 촬영 요청을 거부했습니다: {detail}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise ConnectionError(f"비전 Pi 촬영 모드 API에 연결할 수 없습니다: {exc}") from exc
+            raise ConnectionError(f"비전 Pi 촬영 API에 연결할 수 없습니다: {exc}") from exc
         try:
             result = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("비전 Pi 촬영 모드 응답이 올바른 JSON이 아닙니다.") from exc
-        if not isinstance(result, dict):
-            raise RuntimeError("비전 Pi 촬영 모드 응답 형식이 올바르지 않습니다.")
+            raise RuntimeError("비전 Pi 촬영 API 응답이 올바른 JSON이 아닙니다.") from exc
+        if not isinstance(result, dict) or result.get("status") == "error":
+            reason = result.get("reason", "잘못된 응답") if isinstance(result, dict) else "잘못된 응답"
+            raise RuntimeError(f"비전 Pi 촬영 요청 실패: {reason}")
         return result
 
     def _headers(self) -> dict[str, str]:

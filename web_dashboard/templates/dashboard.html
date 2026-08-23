@@ -74,8 +74,14 @@
           <button id="vision-refresh" class="secondary" type="button" disabled>↻ 목록 새로고침</button>
           <button id="vision-delete-selected" class="vision-danger" type="button" disabled>선택 삭제</button>
           <button id="vision-delete-local" class="secondary" type="button" disabled>Pi 전송본 정리</button>
-          <button id="vision-capture" type="button" aria-pressed="false" disabled>📷 촬영 모드 시작</button>
+          <button id="vision-capture" type="button" disabled>📷 지금 촬영</button>
           <button id="vision-send-analysis" type="button" disabled title="LLM 분석 서버 API 주소와 요청 형식이 필요합니다.">분석팀 전송</button>
+        </div>
+        <div class="vision-capture-settings">
+          <label for="vision-capture-interval">촬영 주기</label>
+          <input id="vision-capture-interval" type="number" min="0.2" max="3600" step="0.1" value="1" disabled>
+          <span>초마다 저장</span>
+          <button id="vision-apply-interval" class="secondary" type="button" disabled>주기 적용</button>
         </div>
         <div class="vision-selection-bar">
           <label><input id="vision-select-all" type="checkbox" disabled> 전체 선택</label>

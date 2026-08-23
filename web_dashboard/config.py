@@ -35,6 +35,9 @@ class DashboardSettings(BaseSettings):
     VISION_PI_STATE_URL: str | None = None
     VISION_PI_STATE_TOKEN: str | None = None
     VISION_PI_STATE_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
+    # Vision team's capture.py control server, for example
+    # http://WEBCAM_PI_IP:8002. This process already owns the webcam.
+    VISION_PI_CAPTURE_URL: str | None = None
 
     # Raspberry Pi control agent. This must point at the agent's command
     # endpoint, for example http://192.168.0.42:9200/api/control.

@@ -83,8 +83,9 @@ DASHBOARD_CAMERA_URL=http://raspberry-pi.local:8889/cam
 DASHBOARD_VISION_SERVER_URL=http://127.0.0.1:8000
 DASHBOARD_VISION_TIMEOUT_S=35
 # Separate webcam Raspberry Pi (not the rover-control Pi).
-DASHBOARD_VISION_PI_STATE_URL=http://webcam-pi.local:8002/api/drive-state
+DASHBOARD_VISION_PI_STATE_URL=http://webcam-pi.local:8003/api/drive-state
 DASHBOARD_VISION_PI_STATE_TOKEN=replace-with-a-shared-secret
+DASHBOARD_VISION_PI_CAPTURE_URL=http://webcam-pi.local:8002
 DASHBOARD_LIVE_POLL_INTERVAL_S=1.0
 DASHBOARD_TELEMETRY_STALE_AFTER_S=3.0
 DASHBOARD_ROVER_CONTROL_URL=http://raspberry-pi.local:9200/api/control
@@ -103,10 +104,10 @@ DASHBOARD_WEATHER_REFRESH_INTERVAL_MINUTES=30
 
 The current vision-team server does not publish an HTTP endpoint for sending
 images to the LLM team, so `분석팀 전송` remains disabled until its URL,
-authentication, request, and response schema are provided. The WEB-owned Pi
-receiver supplies a separate capture-mode API without editing vision-team
-code. While enabled it saves one JPEG per configured interval into the same
-day-based local image directory consumed by the existing upload process.
+authentication, request, and response schema are provided. The vision team's
+latest `capture.py` owns the webcam and publishes `/capture-now`, `/interval`,
+and `/set-interval` on port 8002. The dashboard uses those APIs directly;
+manual captures are saved to the same local directory consumed by upload.
 
 `VISION_PI_STATE_URL` is a separate event channel for the webcam Pi. Run
 `python -m web_dashboard.vision_pi_state_receiver` on that Pi. The dashboard
@@ -115,11 +116,10 @@ uses the first observed state only as its local baseline and then sends only
 500 ms heartbeats are not forwarded. The receiver stores the latest event in
 `vision_drive_state.json`.
 
-Capture-mode Pi options are `VISION_CAPTURE_DIR` (defaults to the existing
-`vision/image_transfer/system/pi_agent/images` directory),
-`VISION_CAMERA_INDEX` (default `0`), and `VISION_CAPTURE_INTERVAL_S` (default
-`1.0`). Do not run the original always-on `capture.py` at the same time as
-dashboard capture mode because two processes cannot safely own one webcam.
+The dashboard can change the active interval from 0.2 to 3600 seconds. The
+vision Pi applies its configured minimum and returns the actual applied value.
+Only the vision team's `capture.py` opens the camera, avoiding competing webcam
+owners.
 
 ## KMA weather setup
 

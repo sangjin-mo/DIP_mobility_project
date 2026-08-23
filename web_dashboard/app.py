@@ -50,8 +50,8 @@ class VisionDeleteRequest(BaseModel):
     paths: list[str] = Field(min_length=1, max_length=500)
 
 
-class VisionCaptureModeRequest(BaseModel):
-    enabled: bool
+class VisionCaptureIntervalRequest(BaseModel):
+    interval_s: float = Field(ge=0.2, le=3600.0)
 
 
 def create_app(
@@ -84,6 +84,7 @@ def create_app(
     )
     vision_state = VisionStateService(
         web_config.VISION_PI_STATE_URL,
+        capture_url=web_config.VISION_PI_CAPTURE_URL,
         token=web_config.VISION_PI_STATE_TOKEN,
         timeout_s=web_config.VISION_PI_STATE_TIMEOUT_S,
     )
@@ -112,6 +113,7 @@ def create_app(
             "camera_configured": vision.configured or bool(web_config.CAMERA_URL),
             "vision_capture_configured": vision.configured,
             "vision_pi_state_configured": vision_state.configured,
+            "vision_pi_capture_configured": vision_state.capture_configured,
             "control_configured": control.configured,
             "weather_configured": weather.configured,
             "weather_refresh_interval_s": web_config.WEATHER_REFRESH_INTERVAL_MINUTES * 60,
@@ -189,8 +191,17 @@ def create_app(
             "last_result": vision_state.last_result,
         }
 
-    @app.get("/api/vision/capture-mode")
-    async def vision_capture_mode_status() -> dict:
+    @app.post("/api/vision/capture-now")
+    async def capture_vision_image_now() -> dict:
+        try:
+            return await asyncio.to_thread(vision_state.capture_now)
+        except ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/vision/capture-interval")
+    async def vision_capture_interval() -> dict:
         try:
             return await asyncio.to_thread(vision_state.capture_status)
         except ConnectionError as exc:
@@ -198,10 +209,13 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    @app.post("/api/vision/capture-mode")
-    async def set_vision_capture_mode(request: VisionCaptureModeRequest) -> dict:
+    @app.post("/api/vision/capture-interval")
+    async def set_vision_capture_interval(request: VisionCaptureIntervalRequest) -> dict:
         try:
-            return await asyncio.to_thread(vision_state.set_capture_mode, request.enabled)
+            return await asyncio.to_thread(
+                vision_state.set_capture_interval,
+                request.interval_s,
+            )
         except ConnectionError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except RuntimeError as exc:

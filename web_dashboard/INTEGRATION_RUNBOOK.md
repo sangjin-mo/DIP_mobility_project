@@ -60,9 +60,8 @@ curl http://127.0.0.1:9200/api/status
 주소가 `PC_IP:8000`을 가리키는지 확인한다. 이 설정은 비전 담당 소유이므로
 WEB 코드에서 덮어쓰지 않는다.
 
-항상 촬영하는 기존 방식이 필요할 때만 터미널 1에서 `capture.py`를 실행한다.
-대시보드의 촬영 모드 버튼을 사용할 때는 같은 카메라를 두 프로세스가 동시에
-열지 않도록 이 명령을 실행하지 않는다.
+터미널 1에서 비전팀의 `capture.py`를 실행한다. 이 프로세스가 카메라를 소유하고
+자동 촬영, 수동 촬영, 촬영 주기 API를 함께 제공한다.
 
 ```bash
 cd vision/image_transfer/system/pi_agent
@@ -82,19 +81,21 @@ uvicorn upload_server:app --host 0.0.0.0 --port 8001
 ```bash
 cd ~/DIP_mobility_project
 export VISION_DRIVE_STATE_TOKEN='PC와 동일한 공유 토큰'
-export VISION_CAPTURE_DIR="$HOME/DIP_mobility_project/vision/image_transfer/system/pi_agent/images"
 python -m web_dashboard.vision_pi_state_receiver
 ```
 
-수신기는 기본적으로 `:8002/api/drive-state`를 사용하고 최신 상태를
+수신기는 비전팀 촬영 API의 8002번 포트와 겹치지 않도록 기본적으로
+`:8003/api/drive-state`를 사용하고 최신 상태를
 `vision_drive_state.json`에 저장한다. 최초 관측값은 WEB의 비교 기준으로만
 사용하며, 이후 `RUNNING ↔ STOPPED` 등 실제 상태 전환만 전달된다. 0.5초
 heartbeat는 비전 Pi로 보내지 않는다.
 
-대시보드에서 `촬영 모드 시작`을 누르면 수신기가 웹캠을 열고 기본 1초 간격으로
-위 이미지 경로의 날짜 폴더에 JPEG를 저장한다. `촬영 모드 정지`를 누르면 카메라를
-반납한다. 저장된 파일은 기존 `upload_server.py` 전송 대상이므로 `라즈베리파이
-사진 불러오기` 버튼으로 PC VIS 서버에 가져올 수 있다.
+대시보드에서 `지금 촬영`을 누르면 비전팀 `capture.py`의 `/capture-now`가 현재
+프레임을 날짜 폴더에 JPEG로 저장한다. 저장된 파일은 기존 `upload_server.py`
+전송 대상이므로 `라즈베리파이 사진 불러오기` 버튼으로 PC VIS 서버에 가져온다.
+
+`촬영 주기` 입력란에는 0.2~3600초를 지정할 수 있다. `주기 적용`을 누르면
+비전팀 `/set-interval` API가 실행 중 주기를 변경한다.
 
 현재 비전 계약은 버튼을 누르는 순간 카메라를 새로 여는 방식이 아니다.
 `capture.py`가 1초마다 저장한 이미지 중 아직 보내지 않은 파일을 전송한다.
@@ -134,8 +135,9 @@ VIS 서버가 준비된 것이다.
 ```dotenv
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_VISION_SERVER_URL=http://127.0.0.1:8000
-DASHBOARD_VISION_PI_STATE_URL=http://WEBCAM_PI_IP:8002/api/drive-state
+DASHBOARD_VISION_PI_STATE_URL=http://WEBCAM_PI_IP:8003/api/drive-state
 DASHBOARD_VISION_PI_STATE_TOKEN=PC와_동일한_공유_토큰
+DASHBOARD_VISION_PI_CAPTURE_URL=http://WEBCAM_PI_IP:8002
 DASHBOARD_ROVER_CONTROL_URL=http://DONKEY_PI_IP:9200/api/control
 DASHBOARD_ROVER_CONTROL_TOKEN=CONTROL_SECRET
 DASHBOARD_DEFAULT_TARGET_SPEED_MPS=0.25

@@ -69,6 +69,8 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
         "vision-delete-selected",
         "vision-delete-local",
         "vision-capture",
+        "vision-capture-interval",
+        "vision-apply-interval",
         "vision-send-analysis",
         "vision-image-grid",
         "start-drive",
@@ -347,7 +349,7 @@ def test_control_state_is_observed_for_webcam_pi_without_changing_response(tmp_p
         ),
         dashboard_settings=DashboardSettings(
             ROVER_CONTROL_URL="http://rover.local:9200/api/control",
-            VISION_PI_STATE_URL="http://webcam-pi.local:8002/api/drive-state",
+            VISION_PI_STATE_URL="http://webcam-pi.local:8003/api/drive-state",
         ),
     )
     accepted = {
@@ -369,7 +371,7 @@ def test_control_state_is_observed_for_webcam_pi_without_changing_response(tmp_p
     observe.assert_called_once_with(accepted["rover"])
 
 
-def test_capture_mode_route_forwards_to_webcam_pi(tmp_path):
+def test_capture_now_route_forwards_to_vision_team_api(tmp_path):
     app = create_app(
         ai_settings=Settings(
             DATA_ROOT=tmp_path / "data",
@@ -377,27 +379,52 @@ def test_capture_mode_route_forwards_to_webcam_pi(tmp_path):
             LLM_ENABLED=False,
         ),
         dashboard_settings=DashboardSettings(
-            VISION_PI_STATE_URL="http://webcam-pi.local:8002/api/drive-state",
+            VISION_PI_CAPTURE_URL="http://webcam-pi.local:8002",
         ),
     )
-    capture_status = {
-        "enabled": True,
-        "saved_count": 2,
-        "last_filename": "2026-08-23/cam.jpg",
-        "last_error": None,
-    }
+    capture_result = {"status": "ok", "filename": "crop.jpg"}
 
     with (
         patch(
-            "web_dashboard.app.VisionStateService.set_capture_mode",
-            return_value=capture_status,
-        ) as set_capture_mode,
+            "web_dashboard.app.VisionStateService.capture_now",
+            return_value=capture_result,
+        ) as capture_now,
         TestClient(app) as client,
     ):
-        response = client.post("/api/vision/capture-mode", json={"enabled": True})
+        response = client.post("/api/vision/capture-now")
+        status = client.get("/api/status")
 
-    assert response.json() == capture_status
-    set_capture_mode.assert_called_once_with(True)
+    assert response.json() == capture_result
+    assert status.json()["vision_pi_capture_configured"] is True
+    capture_now.assert_called_once_with()
+
+
+def test_capture_interval_route_forwards_validated_seconds(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(
+            VISION_PI_CAPTURE_URL="http://webcam-pi.local:8002",
+        ),
+    )
+    capture_status = {"enabled": True, "interval_s": 5.0, "saved_count": 2}
+
+    with (
+        patch(
+            "web_dashboard.app.VisionStateService.set_capture_interval",
+            return_value=capture_status,
+        ) as set_interval,
+        TestClient(app) as client,
+    ):
+        accepted = client.post("/api/vision/capture-interval", json={"interval_s": 5})
+        rejected = client.post("/api/vision/capture-interval", json={"interval_s": 0.1})
+
+    assert accepted.json()["interval_s"] == 5.0
+    assert rejected.status_code == 422
+    set_interval.assert_called_once_with(5.0)
 
 
 def test_weather_api_is_disabled_until_kma_settings_are_configured(tmp_path):
