@@ -92,6 +92,18 @@ python main.py
 브라우저에서 `http://127.0.0.1:8000/images`를 열어 `images` 배열이 반환되면
 VIS 서버가 준비된 것이다.
 
+대시보드의 비전 이미지 관리 화면은 VIS 서버의 기존 계약을 그대로 사용한다.
+
+- `POST /control/request-transfer`: Pi의 미전송 촬영본 가져오기
+- `GET /images`: PC에 수신된 이미지 목록
+- `POST /images/delete`: 선택한 PC 수신본 삭제
+- `POST /control/delete-all-local`: 업로드 완료된 Pi 촬영본 정리
+
+현재 비전 서버에는 단발 촬영 HTTP API와 LLM 분석팀 전송 API가 없다. 그래서
+두 버튼은 화면에 연동 대기로 표시되며 성공한 것처럼 처리하지 않는다. 해당
+기능을 활성화하려면 담당자로부터 URL, 인증 방식, 요청 본문, 응답 형식을 먼저
+받아 WEB 어댑터에 추가해야 한다.
+
 ## 5. PC의 WEB 대시보드
 
 저장소 루트의 `.env`에 아래 값을 넣는다. 실제 비밀 문자열은 Git에 커밋하지

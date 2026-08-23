@@ -64,6 +64,51 @@ def test_latest_image_is_proxied_only_from_configured_origin():
     assert content_type == "image/jpeg"
 
 
+def test_images_are_normalised_and_selected_image_is_proxied():
+    service = VisionCaptureService("http://vision.local:8000")
+    listing = {
+        "images": [
+            {
+                "filename": "crop.jpg",
+                "day": "2026-08-23",
+                "rel_path": "2026-08-23/crop.jpg",
+                "url": "/media/2026-08-23/crop.jpg",
+            }
+        ]
+    }
+    responses = [FakeResponse(listing), FakeResponse(listing), FakeResponse(b"jpeg", "image/jpeg")]
+    with patch(
+        "web_dashboard.services.vision_service.urllib.request.urlopen",
+        side_effect=responses,
+    ):
+        images = service.images()
+        data, content_type = service.image("2026-08-23/crop.jpg")
+
+    assert images[0]["image_url"].startswith("/api/vision/image?path=")
+    assert data == b"jpeg"
+    assert content_type == "image/jpeg"
+
+
+def test_delete_and_pi_cleanup_use_vis_contract():
+    service = VisionCaptureService("http://vision.local:8000")
+    with patch(
+        "web_dashboard.services.vision_service.urllib.request.urlopen",
+        side_effect=[
+            FakeResponse({"deleted": ["2026-08-23/crop.jpg"], "rejected": []}),
+            FakeResponse({"deleted": ["one.jpg", "two.jpg"], "pending_kept": 0}),
+        ],
+    ) as urlopen:
+        deleted = service.delete_received(["2026-08-23/crop.jpg"])
+        cleaned = service.delete_all_local()
+
+    delete_request = urlopen.call_args_list[0].args[0]
+    assert delete_request.full_url.endswith("/images/delete")
+    assert json.loads(delete_request.data) == {"paths": ["2026-08-23/crop.jpg"]}
+    assert urlopen.call_args_list[1].args[0].full_url.endswith("/control/delete-all-local")
+    assert len(deleted["deleted"]) == 1
+    assert len(cleaned["deleted"]) == 2
+
+
 def test_capture_does_not_report_success_when_every_upload_failed():
     service = VisionCaptureService("http://vision.local:8000")
     with patch(

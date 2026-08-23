@@ -62,6 +62,12 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
     assert "스마트 농장 관리 대시보드" in html
     for element_id in (
         "capture-image",
+        "vision-refresh",
+        "vision-delete-selected",
+        "vision-delete-local",
+        "vision-capture",
+        "vision-send-analysis",
+        "vision-image-grid",
         "start-drive",
         "stop-drive",
         "target-speed",
@@ -101,7 +107,7 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
     assert "관리할 기능을 선택하세요" in html
     assert "＋ 레포트 생성" in html
     assert '<div id="llm-report" class="report-reader">' in html
-    assert "1 / 4 카메라 촬영" in html
+    assert "1 / 4 비전 이미지 관리" in html
     assert "4 / 4 차량 제어" in html
     assert "지난 24시간 · 1시간 단위" in html
     assert "분석 완료 후 안내합니다." not in html
@@ -144,6 +150,54 @@ def test_camera_and_crop_report_adapter_routes_are_exposed(tmp_path):
     assert camera.status_code == 200
     assert camera.json()["image"]["filename"] == "crop.jpg"
     assert report.json()["available"] is False
+
+
+def test_vision_management_routes_forward_to_vis_server(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(VISION_SERVER_URL="http://vision.local:8000"),
+    )
+    images = [
+        {
+            "filename": "crop.jpg",
+            "day": "2026-08-23",
+            "rel_path": "2026-08-23/crop.jpg",
+            "image_url": "/api/vision/image?path=2026-08-23%2Fcrop.jpg",
+        }
+    ]
+
+    with (
+        patch("web_dashboard.app.VisionCaptureService.images", return_value=images),
+        patch(
+            "web_dashboard.app.VisionCaptureService.transfer",
+            return_value={"requested": 1, "success": 1, "failed": 0},
+        ),
+        patch(
+            "web_dashboard.app.VisionCaptureService.delete_received",
+            return_value={"deleted": ["2026-08-23/crop.jpg"], "rejected": []},
+        ) as delete_received,
+        patch(
+            "web_dashboard.app.VisionCaptureService.delete_all_local",
+            return_value={"deleted": ["one.jpg", "two.jpg", "three.jpg"], "pending_kept": 0},
+        ),
+        TestClient(app) as client,
+    ):
+        listing = client.get("/api/vision/images")
+        transfer = client.post("/api/vision/transfer")
+        deletion = client.post(
+            "/api/vision/images/delete", json={"paths": ["2026-08-23/crop.jpg"]}
+        )
+        cleanup = client.post("/api/vision/local/delete-all")
+
+    assert listing.json()["count"] == 1
+    assert transfer.json()["transfer"]["success"] == 1
+    assert len(deletion.json()["deleted"]) == 1
+    assert len(cleanup.json()["deleted"]) == 3
+    delete_received.assert_called_once_with(["2026-08-23/crop.jpg"])
 
 
 def test_report_generation_requires_a_saved_patrol(tmp_path):

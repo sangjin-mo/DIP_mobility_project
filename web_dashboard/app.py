@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -42,6 +42,10 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 
 class StartRequest(BaseModel):
     target_speed_mps: float | None = Field(default=None, gt=0, le=1.0)
+
+
+class VisionDeleteRequest(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=500)
 
 
 def create_app(
@@ -184,6 +188,55 @@ def create_app(
         except VisionResponseError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return Response(content=data, media_type=content_type, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/vision/images")
+    async def vision_images() -> dict:
+        try:
+            images = await asyncio.to_thread(vision.images)
+        except VisionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VisionResponseError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"count": len(images), "images": images}
+
+    @app.get("/api/vision/image")
+    async def vision_image(path: str = Query(min_length=1, max_length=500)) -> Response:
+        try:
+            data, content_type = await asyncio.to_thread(vision.image, path)
+        except VisionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VisionResponseError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(content=data, media_type=content_type, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/vision/transfer")
+    async def vision_transfer() -> dict:
+        try:
+            transfer = await asyncio.to_thread(vision.transfer)
+            images = await asyncio.to_thread(vision.images)
+        except VisionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VisionResponseError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"transfer": transfer, "count": len(images), "images": images}
+
+    @app.post("/api/vision/images/delete")
+    async def delete_vision_images(request: VisionDeleteRequest) -> dict:
+        try:
+            return await asyncio.to_thread(vision.delete_received, request.paths)
+        except VisionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VisionResponseError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/vision/local/delete-all")
+    async def delete_all_local_vision_images() -> dict:
+        try:
+            return await asyncio.to_thread(vision.delete_all_local)
+        except VisionUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VisionResponseError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/crop-report/latest")
     async def latest_crop_report() -> dict:
