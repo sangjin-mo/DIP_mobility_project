@@ -137,10 +137,53 @@ def drive(cfg, model_path=None, use_joystick=False, model_type=None, camera_type
         ctr = LocalWebController()
 
     
-    V.add(ctr, 
+    V.add(ctr,
           inputs=['cam/image_array'],
           outputs=['user/angle', 'user/throttle', 'user/mode', 'recording'],
           threaded=True)
+
+    # Optional command input from the project dashboard. When enabled, this
+    # part deliberately overrides LocalWebController's user command and
+    # forces user mode. The part owns a heartbeat watchdog, so losing the
+    # browser/dashboard/API path always resolves to throttle=0 locally.
+    if getattr(cfg, 'DASHBOARD_CONTROL_ENABLED', False):
+        from dashboard_control import DashboardControlPart
+
+        if not cfg.DASHBOARD_CONTROL_TOKEN:
+            raise ValueError('DASHBOARD_CONTROL_TOKEN is required when dashboard control is enabled')
+
+        use_pilot_steering = getattr(cfg, 'DASHBOARD_USE_PILOT_STEERING', False)
+        if use_pilot_steering and not model_path:
+            raise ValueError(
+                'DASHBOARD_USE_PILOT_STEERING requires a trained model: '
+                'start with manage.py drive --model=<path to .h5>'
+            )
+
+        dashboard_control = DashboardControlPart(
+            host=cfg.DASHBOARD_CONTROL_HOST,
+            port=cfg.DASHBOARD_CONTROL_PORT,
+            token=cfg.DASHBOARD_CONTROL_TOKEN,
+            heartbeat_timeout_s=cfg.DASHBOARD_HEARTBEAT_TIMEOUT_S,
+            max_speed_mps=cfg.DASHBOARD_MAX_SPEED_MPS,
+            max_throttle=cfg.DASHBOARD_MAX_THROTTLE,
+            straight_steering=cfg.DASHBOARD_STRAIGHT_STEERING,
+            use_pilot_steering=use_pilot_steering,
+        )
+        V.add(
+            dashboard_control,
+            inputs=['user/angle', 'user/throttle', 'user/mode'],
+            outputs=['user/angle', 'user/throttle', 'user/mode'],
+            threaded=True,
+        )
+
+        if getattr(cfg, 'VISION_GPIO_STOP_ENABLED', False):
+            from gpio_safety import VisionGpioStopPart
+
+            vision_gpio = VisionGpioStopPart(
+                dashboard_control,
+                input_pin=cfg.VISION_GPIO_STOP_PIN,
+            )
+            V.add(vision_gpio, threaded=True)
 
     #this throttle filter will allow one tap back for esc reverse
     th_filter = ThrottleFilter()
@@ -409,6 +452,54 @@ def drive(cfg, model_path=None, use_joystick=False, model_type=None, camera_type
     V.add(aiLauncher,
         inputs=['user/mode', 'throttle'],
         outputs=['throttle'])
+
+    # The LiDAR gate is intentionally after DriveMode and AiLaunch, immediately
+    # before the actuator setup below.  It can only make the command safer:
+    # an obstacle (or a failed LiDAR when fail-safe is enabled) forces zero
+    # throttle; a clear scan restores the still-active dashboard command.
+    if getattr(cfg, 'LIDAR_SAFETY_ENABLED', False):
+        from lidar_safety import LidarSafetyGate, YDLidarObstaclePart
+
+        print(
+            "LiDAR safety enabled: "
+            f"stop <= {cfg.LIDAR_STOP_DISTANCE_M:.2f} m, "
+            f"sector +/- {cfg.LIDAR_FORWARD_HALF_ANGLE_DEG:.0f} deg"
+        )
+
+        lidar = YDLidarObstaclePart(
+            port=cfg.LIDAR_PORT,
+            stop_distance_m=cfg.LIDAR_STOP_DISTANCE_M,
+            forward_center_deg=cfg.LIDAR_FORWARD_CENTER_DEG,
+            forward_half_angle_deg=cfg.LIDAR_FORWARD_HALF_ANGLE_DEG,
+            clear_scans_required=cfg.LIDAR_CLEAR_SCANS_REQUIRED,
+            fail_safe_stop=cfg.LIDAR_FAIL_SAFE_STOP,
+        )
+        V.add(
+            lidar,
+            outputs=['lidar/blocked', 'lidar/connected', 'lidar/nearest_m'],
+            threaded=True,
+        )
+        V.add(
+            LidarSafetyGate(),
+            # Deliberately gate only throttle. The trained pilot's ``angle``
+            # output bypasses LiDAR entirely, so obstacle detection cannot
+            # change line-following steering or re-centre the wheels.
+            inputs=['throttle', 'lidar/blocked'],
+            outputs=['throttle'],
+        )
+    else:
+        V.add(
+            Lambda(lambda: (False, False, None)),
+            outputs=['lidar/blocked', 'lidar/connected', 'lidar/nearest_m'],
+        )
+
+    if getattr(cfg, 'VISION_GPIO_STATUS_ENABLED', False):
+        from gpio_safety import DriveStatusGpioPart
+
+        V.add(
+            DriveStatusGpioPart(cfg.VISION_GPIO_STATUS_PIN),
+            inputs=['throttle'],
+        )
 
     if isinstance(ctr, JoystickController):
         ctr.set_button_down_trigger(cfg.AI_LAUNCH_ENABLE_BUTTON, aiLauncher.enable_ai_launch)

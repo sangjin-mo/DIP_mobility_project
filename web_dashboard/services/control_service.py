@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from enum import Enum
@@ -36,14 +37,49 @@ class RoverControlService:
         control_url: str | None,
         timeout_s: float = 2.0,
         token: str | None = None,
+        status_url: str | None = None,
     ) -> None:
         self._control_url = control_url.strip() if control_url else None
+        self._status_url = status_url.strip() if status_url else self._derive_status_url()
         self._timeout_s = timeout_s
         self._token = token
 
     @property
     def configured(self) -> bool:
         return bool(self._control_url)
+
+    def status(self) -> dict:
+        """Read the rover-owned state instead of inferring it in the browser."""
+        if not self._status_url:
+            raise ControlUnavailableError(
+                "차량 상태 API가 설정되지 않았습니다. "
+                "DASHBOARD_ROVER_CONTROL_URL을 설정하세요."
+            )
+        headers = {}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        request = urllib.request.Request(self._status_url, headers=headers, method="GET")
+        result = self._open_json(request, "상태")
+        state = result.get("state")
+        if state not in {"RUNNING", "STOPPED", "EMERGENCY"}:
+            raise ControlCommandError("차량 상태 API가 올바른 state를 반환하지 않았습니다.")
+        status = {
+            "connected": True,
+            "state": state,
+            "target_speed_mps": result.get("target_speed_mps"),
+        }
+        for field in (
+            "motion_state",
+            "commanded_throttle",
+            "applied_throttle",
+            "drive_mode",
+            "lidar_connected",
+            "lidar_blocked",
+            "lidar_nearest_m",
+        ):
+            if field in result:
+                status[field] = result[field]
+        return status
 
     def send(self, command: DriveCommand, target_speed_mps: float | None = None) -> dict:
         if not self._control_url:
@@ -72,21 +108,7 @@ class RoverControlService:
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout_s) as response:
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise ControlCommandError(
-                f"차량이 명령을 거부했습니다 (HTTP {exc.code}): {detail}"
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise ControlUnavailableError(f"차량 제어 API에 연결할 수 없습니다: {exc}") from exc
-
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ControlCommandError("차량 제어 API가 올바른 JSON을 반환하지 않았습니다.") from exc
+        result = self._open_json(request, "명령")
         if not isinstance(result, dict) or result.get("accepted") is not True:
             reason = result.get("reason", "거부 사유 없음") if isinstance(result, dict) else "잘못된 응답"
             raise ControlCommandError(f"차량이 명령을 승인하지 않았습니다: {reason}")
@@ -98,3 +120,27 @@ class RoverControlService:
             "target_speed_mps": payload.get("target_speed_mps"),
             "rover": result,
         }
+
+    def _derive_status_url(self) -> str | None:
+        if not self._control_url:
+            return None
+        return urllib.parse.urljoin(self._control_url, "status")
+
+    def _open_json(self, request: urllib.request.Request, operation: str) -> dict:
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout_s) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise ControlCommandError(
+                f"차량이 {operation} 요청을 거부했습니다 (HTTP {exc.code}): {detail}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise ControlUnavailableError(f"차량 제어 API에 연결할 수 없습니다: {exc}") from exc
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ControlCommandError("차량 제어 API가 올바른 JSON을 반환하지 않았습니다.") from exc
+        if not isinstance(result, dict):
+            raise ControlCommandError("차량 제어 API 응답 형식이 올바르지 않습니다.")
+        return result

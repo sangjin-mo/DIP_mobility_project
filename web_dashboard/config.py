@@ -24,12 +24,21 @@ class DashboardSettings(BaseSettings):
     TELEMETRY_STALE_AFTER_S: float = 3.0
     CAMERA_URL: str | None = None
 
+    # Existing VIS PC server. The dashboard calls its transfer endpoint and
+    # proxies the newest uploaded still image; it never touches webcam GPIO.
+    VISION_SERVER_URL: str | None = None
+    VISION_TIMEOUT_S: float = Field(default=35.0, gt=0, le=60)
+    VISION_MAX_IMAGE_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
+
     # Raspberry Pi control agent. This must point at the agent's command
     # endpoint, for example http://192.168.0.42:9200/api/control.
     ROVER_CONTROL_URL: str | None = None
+    # Optional override. By default /api/status is derived from CONTROL_URL.
+    ROVER_STATUS_URL: str | None = None
     ROVER_CONTROL_TOKEN: str | None = None
     CONTROL_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
     DEFAULT_TARGET_SPEED_MPS: float = Field(default=0.25, gt=0, le=1.0)
+    MAX_TARGET_SPEED_MPS: float = Field(default=0.50, gt=0, le=1.0)
 
     # KMA Village Forecast API. Both encoded and decoded data.go.kr keys are
     # accepted. A fixed farm only needs its grid coordinates configured once;

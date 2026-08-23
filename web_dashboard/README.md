@@ -23,7 +23,9 @@ pipeline are not duplicated here.
 - one responsive HTML/CSS/JavaScript dashboard
 - latest telemetry and event over `/ws/live`
 - patrol list, metadata, Markdown, and selected-image APIs
-- camera placeholder, enabled by `DASHBOARD_CAMERA_URL`
+- webcam still-image transfer through the existing VIS server, enabled by
+  `DASHBOARD_VISION_SERVER_URL` (legacy direct image URLs remain supported)
+- latest zone metadata and LLM Markdown report on the crop report screen
 - drive status plus start and immediate-stop commands forwarded to a
   separately configured Raspberry Pi control agent
 - KMA ultra-short observation/forecast weather over `/api/weather`, cached so
@@ -51,12 +53,17 @@ Optional `.env` values:
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=8080
 DASHBOARD_CAMERA_URL=http://raspberry-pi.local:8889/cam
+DASHBOARD_VISION_SERVER_URL=http://127.0.0.1:8000
+DASHBOARD_VISION_TIMEOUT_S=35
 DASHBOARD_LIVE_POLL_INTERVAL_S=1.0
 DASHBOARD_TELEMETRY_STALE_AFTER_S=3.0
 DASHBOARD_ROVER_CONTROL_URL=http://raspberry-pi.local:9200/api/control
+# Optional; defaults to the /api/status sibling of ROVER_CONTROL_URL.
+DASHBOARD_ROVER_STATUS_URL=http://raspberry-pi.local:9200/api/status
 DASHBOARD_ROVER_CONTROL_TOKEN=replace-with-a-shared-secret
 DASHBOARD_CONTROL_TIMEOUT_S=2.0
 DASHBOARD_DEFAULT_TARGET_SPEED_MPS=0.25
+DASHBOARD_MAX_TARGET_SPEED_MPS=0.50
 DASHBOARD_KMA_SERVICE_KEY=service-key-from-data.go.kr
 DASHBOARD_KMA_NX=89
 DASHBOARD_KMA_NY=90
@@ -88,6 +95,11 @@ The weather card maps KMA precipitation and sky states to a matching icon. Its
 `새로고침` button calls `POST /api/weather/refresh`, which deliberately bypasses
 the TTL cache and requests a fresh KMA response immediately.
 
+The dashboard also requests the KMA ultra-short observations for the current
+hour and the preceding 23 hours. The weather screen renders those actual
+hourly `T1H` temperature and `RN1` precipitation observations as a line chart
+and bar chart without a browser CDN dependency.
+
 ## Drive control contract
 
 The browser calls this dashboard only. The dashboard then sends one JSON
@@ -111,6 +123,17 @@ timeout. The rover must return
 accepted the command. A successful HTTP send alone is not treated as a
 successful drive command.
 
+The vehicle screen sends its selected target speed with `START`. The slider
+defaults to `0.25 m/s` and is capped at `DASHBOARD_MAX_TARGET_SPEED_MPS`
+(`0.50 m/s` by default, matching the rover's current configured maximum).
+Changing the slider while the rover is running sends another validated START
+command so the rover updates its speed target without bypassing its own cap.
+
+The dashboard also polls the rover-owned `GET /api/status` endpoint every two
+seconds. Start/stop buttons are enabled only while that endpoint is reachable,
+and the status pill displays the returned `RUNNING` or `STOPPED` state instead
+of treating a configured URL as proof that the rover is online.
+
 The real Raspberry Pi agent must remain the sole owner of PWM/GPIO, enforce a
 heartbeat timeout, and stop the motors locally when communication is lost.
 This repository does not guess the conversion from m/s to throttle; that value
@@ -133,3 +156,5 @@ python -m pytest -q web_dashboard/tests
 ```
 
 See [SEQUENCE.md](SEQUENCE.md) for integration boundaries and runtime flows.
+For the two-Raspberry-Pi deployment order and required addresses, see
+[INTEGRATION_RUNBOOK.md](INTEGRATION_RUNBOOK.md).

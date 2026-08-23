@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+env/
+venv/
+.venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+
+# Temporary files
+*.log
+# DonkeyCar generated data
+data/
+
+# Trained AI models
+models/

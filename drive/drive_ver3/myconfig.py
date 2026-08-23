@@ -226,3 +226,36 @@
 # PID_THROTTLE = 0.2                  # constant throttle value during path following
 # SAVE_PATH_BTN = "cross"             # joystick button to save path
 # RESET_ORIGIN_BTN = "triangle"       # joystick button to press to move car back to origin
+
+# Project dashboard control (feature/web-drive-control). Wheels must be
+# raised and STOP verified before START is tested. See drive/README.md.
+DASHBOARD_CONTROL_ENABLED = True
+DASHBOARD_CONTROL_TOKEN = "7z2V_0PAjETB7WTATjSuiIXLp5YSbmJFuI8Uap2m8uE"
+
+# Pilot-steered driving via the dashboard: START hands steering to
+# mypilot.h5 (local_angle mode); throttle/STOP/heartbeat stay dashboard-owned.
+# Requires manage.py drive --model=models/mypilot.h5. Verify with wheels
+# raised before a track test (see drive/README.md).
+DASHBOARD_USE_PILOT_STEERING = True
+
+# YDLiDAR X2 is connected directly to the drive Raspberry Pi by USB.
+# With FAIL_SAFE_STOP=True, do not press web START until the LiDAR is detected.
+LIDAR_SAFETY_ENABLED = True
+LIDAR_PORT = "/dev/ttyUSB0"
+# X2 cannot reliably measure at exactly 10 cm (its minimum range).  15 cm is
+# a safety margin that stops the car before an obstacle reaches 10 cm.
+LIDAR_STOP_DISTANCE_M = 0.15
+LIDAR_FORWARD_CENTER_DEG = 0.0
+# Only use the 30-degree forward sector (-15 to +15 degrees). LiDAR controls
+# braking only; the trained pilot remains the sole source of steering.
+LIDAR_FORWARD_HALF_ANGLE_DEG = 15.0
+LIDAR_CLEAR_SCANS_REQUIRED = 3
+LIDAR_FAIL_SAFE_STOP = True
+
+# Vision Raspberry Pi GPIO interface. BCM GPIO17 is an active-high stop event.
+# The stop event is latched as a dashboard STOP and requires web START to clear.
+VISION_GPIO_STOP_ENABLED = True
+VISION_GPIO_STOP_PIN = 17
+# Drive Pi output to a Vision Pi input: 0=moving, 1=stopped.
+VISION_GPIO_STATUS_ENABLED = True
+VISION_GPIO_STATUS_PIN = 27

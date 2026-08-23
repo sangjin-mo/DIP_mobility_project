@@ -3,120 +3,167 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>농업 순찰 로버 대시보드</title>
+  <title>스마트 농장 관리 대시보드</title>
   <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <p class="eyebrow">SMART FARM PATROL</p>
-      <h1>농업 순찰 로버</h1>
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">●</span>
+      <div><p class="eyebrow">SMART FARM DASHBOARD</p><h1>스마트 농장 관리 대시보드</h1></div>
     </div>
-    <div class="connection">
-      <span id="connection-dot" class="dot offline"></span>
-      <span id="connection-label">연결 확인 중</span>
+    <div class="header-summary" aria-label="대시보드 요약">
+      <div class="summary-item"><span>기상 위치</span><strong>대구광역시 수성구</strong></div>
+      <div class="summary-item"><span>자동 갱신</span><strong>30분</strong></div>
     </div>
   </header>
 
-  <main>
-    <section class="hero-grid">
-      <article class="panel camera-panel">
+  <main class="dashboard-shell">
+    <section id="dashboard-home" class="dashboard-home" aria-labelledby="dashboard-home-title">
+      <div class="home-intro">
+        <p class="section-kicker">SMART FARM CONTROL CENTER</p>
+        <h2 id="dashboard-home-title">관리할 기능을 선택하세요</h2>
+        <p>필요한 항목을 선택하면 해당 관리 화면으로 바로 이동합니다.</p>
+      </div>
+      <nav class="feature-menu" aria-label="대시보드 기능 선택">
+        <button class="feature-menu-card" type="button" data-dashboard-target="0">
+          <span class="feature-number">01</span>
+          <span class="feature-icon" aria-hidden="true">📷</span>
+          <span class="feature-copy"><strong>카메라 촬영</strong><small>웹캠 정지 이미지 촬영 및 확인</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+        <button class="feature-menu-card" type="button" data-dashboard-target="1">
+          <span class="feature-number">02</span>
+          <span class="feature-icon" aria-hidden="true">☀️</span>
+          <span class="feature-copy"><strong>기상 정보</strong><small>현재 날씨와 24시간 관측 그래프</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+        <button class="feature-menu-card" type="button" data-dashboard-target="2">
+          <span class="feature-number">03</span>
+          <span class="feature-icon" aria-hidden="true">🌿</span>
+          <span class="feature-copy"><strong>작물 상태 및 레포트</strong><small>구역별 분석 결과와 LLM 레포트</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+        <button class="feature-menu-card" type="button" data-dashboard-target="3">
+          <span class="feature-number">04</span>
+          <span class="feature-icon" aria-hidden="true">🚜</span>
+          <span class="feature-copy"><strong>차량 제어</strong><small>목표 속도 설정과 운행·정지 제어</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+      </nav>
+    </section>
+
+    <section id="dashboard-workspace" class="dashboard-workspace" hidden>
+      <nav class="workspace-navigation" aria-label="기능 화면 탐색">
+        <button id="dashboard-home-button" class="home-button" type="button">← 전체 메뉴</button>
+        <strong id="workspace-title">카메라 촬영</strong>
+      </nav>
+    <section class="dashboard-grid">
+      <article class="panel camera-panel dashboard-slide" data-dashboard-slide aria-label="1 / 4 카메라 촬영" hidden>
         <div class="panel-heading">
-          <h2>실시간 카메라</h2>
-          <span id="camera-status" class="muted">미연결</span>
+          <div><p class="section-kicker">01 · CAMERA</p><h2>카메라 촬영</h2></div>
+          <span id="camera-status" class="status-pill neutral">미연결</span>
         </div>
-        {% if camera_url %}
-        <iframe class="camera-frame" src="{{ camera_url }}" title="로버 카메라"></iframe>
-        {% else %}
-        <div class="camera-placeholder">
-          <span>CAMERA</span>
-          <p><code>DASHBOARD_CAMERA_URL</code> 설정 후 스트림이 표시됩니다.</p>
+        <div id="camera-still" class="camera-still"{% if not camera_url %} hidden{% endif %}><img id="camera-image"{% if camera_url %} src="{{ camera_url }}"{% endif %} alt="최근 촬영 이미지"></div>
+        <div id="camera-placeholder" class="camera-placeholder"{% if camera_url %} hidden{% endif %}>
+          <div class="camera-illustration" aria-hidden="true"><span>🌿</span><span>🌱</span><span>🌿</span><i></i></div>
+          <strong>촬영 이미지 대기</strong>
         </div>
-        {% endif %}
+        <button id="capture-image" class="capture-button" type="button" disabled>📷 이미지 촬영</button>
+        <p id="capture-result" class="notice" role="status"></p>
       </article>
 
-      <section class="metrics" aria-label="실시간 주행정보">
-        <article class="metric"><span>현재 구역</span><strong id="zone">—</strong></article>
-        <article class="metric"><span>주행 상태</span><strong id="drive-state">—</strong></article>
-        <article class="metric"><span>속도</span><strong><span id="speed">—</span> m/s</strong></article>
-        <article class="metric"><span>조향</span><strong id="steer">—</strong></article>
-        <article class="metric"><span>장애물 거리</span><strong><span id="ultra">—</span> cm</strong></article>
-        <article class="metric"><span>마지막 수신</span><strong id="last-received">—</strong></article>
-      </section>
-    </section>
-
-    <section class="panel weather-panel" aria-label="외부 기상정보">
-      <div class="panel-heading">
-        <div>
-          <h2>외부 기상정보</h2>
-          <span class="muted">기상청 초단기실황·예보</span>
-        </div>
-        <div class="weather-actions">
-          <span id="weather-status" class="muted">기상청 API 확인 중</span>
-          <button id="refresh-weather" class="secondary" type="button">새로고침</button>
-        </div>
-      </div>
-      <div class="weather-grid">
-        <article class="weather-primary">
-          <span id="weather-icon" class="weather-icon" role="img" aria-label="날씨 확인 중">❔</span>
-          <div>
-            <strong><span id="weather-temperature">—</span> ℃</strong>
-            <span id="weather-condition">확인 중</span>
-          </div>
-        </article>
-        <article class="weather-item"><span>외부 습도</span><strong><span id="weather-humidity">—</span> %</strong></article>
-        <article class="weather-item"><span>강우 여부</span><strong id="weather-rain">—</strong></article>
-        <article class="weather-item"><span>1시간 강수량</span><strong><span id="weather-precipitation">—</span> mm</strong></article>
-        <article class="weather-item"><span>풍속</span><strong><span id="weather-wind">—</span> m/s</strong></article>
-        <article class="weather-item"><span>관측 기준</span><strong id="weather-observed-at">—</strong></article>
-      </div>
-      <p id="weather-source" class="notice">외부 관측값이며 비닐하우스 내부 센서값이 아닙니다.</p>
-    </section>
-
-    <section class="panel route-panel">
-      <div class="panel-heading">
-        <h2>순찰 경로</h2>
-        <span id="patrol-id" class="muted">순찰 대기</span>
-      </div>
-      <div id="route" class="route"><span class="route-empty">구역 정보 대기 중</span></div>
-    </section>
-
-    <section class="bottom-grid">
-      <article class="panel controls-panel">
+      <article class="panel weather-panel dashboard-slide" data-dashboard-slide aria-label="2 / 4 기상 정보" hidden>
         <div class="panel-heading">
-          <h2>로버 제어</h2>
-          <span id="control-status" class="muted">제어 API 확인 중</span>
+          <div><p class="section-kicker">02 · KMA WEATHER</p><h2>기상 정보</h2></div>
+          <button id="refresh-weather" class="secondary" type="button">↻ 새로고침</button>
         </div>
-        <label class="speed-control" for="target-speed">
-          <span>목표 속도</span>
-          <strong><span id="target-speed-value">0.25</span> m/s</strong>
-          <input id="target-speed" type="range" min="0.05" max="1" step="0.05" value="0.25">
-        </label>
+        <div class="weather-content">
+          <article class="weather-primary">
+            <span id="weather-icon" class="weather-icon" role="img" aria-label="날씨 확인 중">❔</span>
+            <div><strong><span id="weather-temperature">—</span><small>℃</small></strong><span id="weather-condition">확인 중</span></div>
+          </article>
+          <div class="weather-details">
+            <div><span>💧 습도</span><strong><span id="weather-humidity">—</span>%</strong></div>
+            <div><span>🌧 강우 여부</span><strong id="weather-rain">—</strong></div>
+            <div><span>🌂 비 올 확률</span><strong><span id="weather-rain-probability">—</span>%</strong></div>
+            <div><span>☔ 강우량</span><strong><span id="weather-precipitation">—</span> mm</strong></div>
+            <div><span>〰 풍속</span><strong><span id="weather-wind">—</span> m/s</strong></div>
+          </div>
+        </div>
+        <div class="weather-advice" aria-live="polite">
+          <div><span>강우 안내</span><strong id="rain-advice">날씨 조회 후 안내합니다.</strong></div>
+          <div><span>온도 안내</span><strong id="temperature-advice">날씨 조회 후 안내합니다.</strong></div>
+        </div>
+        <div class="weather-meta">
+          <span id="weather-status" class="muted">기상청 API 확인 중</span>
+          <span>관측 <strong id="weather-observed-at">—</strong></span>
+          <span>조회 <strong id="weather-fetched-at">—</strong></span>
+        </div>
+        <p id="weather-source" class="notice">외부 관측값이며 비닐하우스 내부 센서값이 아닙니다.</p>
+        <section class="weather-charts" aria-label="지난 24시간 시간별 기상 관측 그래프">
+          <article class="weather-chart-card">
+            <div class="weather-chart-heading"><strong>시간별 온도</strong><span>지난 24시간 · 1시간 단위</span></div>
+            <svg id="temperature-chart" class="weather-chart" viewBox="0 0 720 190" role="img" aria-label="지난 24시간 온도 관측 그래프"></svg>
+          </article>
+          <article class="weather-chart-card">
+            <div class="weather-chart-heading"><strong>시간별 강수량</strong><span>지난 24시간 · 1시간 단위</span></div>
+            <svg id="precipitation-chart" class="weather-chart" viewBox="0 0 720 190" role="img" aria-label="지난 24시간 강수량 관측 그래프"></svg>
+          </article>
+        </section>
+      </article>
+
+      <article class="panel crop-report-panel dashboard-slide" data-dashboard-slide aria-label="3 / 4 작물 상태 레포트" hidden>
+        <div class="panel-heading">
+          <div><p class="section-kicker">03 · CROP REPORT</p><h2>구역별 작물 상태 레포트</h2></div>
+          <div class="report-heading-actions">
+            <label class="report-history-label" for="report-history">저장 기록</label>
+            <select id="report-history" aria-label="과거 레포트 선택"><option value="">최신 레포트</option></select>
+            <span id="crop-report-status" class="status-pill neutral">레포트 확인 중</span>
+            <button id="refresh-report" class="secondary" type="button">＋ 레포트 생성</button>
+          </div>
+        </div>
+        <div id="crop-grid" class="crop-grid">
+          <article class="crop-card"><div class="crop-title"><strong>A구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
+          <article class="crop-card"><div class="crop-title"><strong>B구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
+        </div>
+        <div class="llm-report-wrap"><div class="llm-report-title"><strong>LLM 종합 레포트</strong><span id="report-generated-at">-</span></div><div id="llm-report" class="report-reader">생성된 레포트가 없습니다.</div></div>
+      </article>
+
+      <article class="panel controls-panel dashboard-slide" data-dashboard-slide aria-label="4 / 4 차량 제어" hidden>
+        <div class="panel-heading">
+          <div><p class="section-kicker">04 · VEHICLE CONTROL</p><h2>차량 제어</h2></div>
+          <span id="control-status" class="status-pill neutral">API 확인 중</span>
+        </div>
+        <div class="control-hero" aria-hidden="true">🚜</div>
+        <section class="speed-control" aria-labelledby="target-speed-label">
+          <div class="speed-control-heading"><span id="target-speed-label">목표 속도</span><strong><span id="target-speed-value">0.25</span> m/s</strong></div>
+          <input id="target-speed" type="range" min="0.05" max="0.50" step="0.05" value="0.25" disabled aria-label="차량 목표 속도">
+          <div class="speed-range-labels"><span>0.05</span><span id="target-speed-maximum">0.50 m/s</span></div>
+        </section>
+        <section class="vehicle-diagnostics" aria-label="차량 안전 상태">
+          <div><span>실제 동작</span><strong id="motion-state">상태 미제공</strong></div>
+          <div><span>LiDAR</span><strong id="lidar-state">상태 미제공</strong></div>
+          <div><span>최근 거리</span><strong id="lidar-nearest">-</strong></div>
+          <div><span>적용 출력</span><strong id="applied-throttle">-</strong></div>
+        </section>
         <div class="controls">
-          <button id="start-drive" disabled>▶ 운행 시작</button>
-          <button id="stop-drive" class="danger" disabled>■ 정지 (비상)</button>
+          <button id="start-drive" class="start-button" disabled>▶ 운행</button>
+          <button id="stop-drive" class="stop-button" disabled>■ 정지</button>
         </div>
         <p id="control-result" class="notice" role="status">차량 제어 API 설정을 확인하고 있습니다.</p>
-      </article>
-
-      <article class="panel event-panel">
-        <div class="panel-heading"><h2>최근 이벤트</h2></div>
-        <div id="latest-event" class="event-empty">수신된 이벤트 없음</div>
+        <section class="work-toggle-section" aria-labelledby="work-toggle-title">
+          <h3 id="work-toggle-title">작업 선택</h3>
+          <div class="work-toggles">
+            <button id="toggle-harvest" class="work-toggle harvest" type="button" aria-pressed="false">🌾 수확</button>
+            <button id="toggle-pest-control" class="work-toggle pest-control" type="button" aria-pressed="false">🛡 방제</button>
+            <button id="toggle-watering" class="work-toggle watering" type="button" aria-pressed="false">💧 급수</button>
+          </div>
+        </section>
       </article>
     </section>
-
-    <section class="panel reports-panel">
-      <div class="panel-heading">
-        <h2>순찰 결과</h2>
-        <button id="refresh-reports" class="secondary">새로고침</button>
-      </div>
-      <div class="report-layout">
-        <div id="report-list" class="report-list"><p class="muted">보고서 조회 중</p></div>
-        <pre id="report-content" class="report-content">순찰 결과를 선택하세요.</pre>
-      </div>
     </section>
   </main>
-
   <script src="/static/dashboard.js" defer></script>
 </body>
 </html>
