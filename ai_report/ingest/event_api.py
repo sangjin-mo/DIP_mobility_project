@@ -7,7 +7,8 @@ store's INSERT OR IGNORE on the (patrol_id, event_seq) primary key.
 
 Called by:
 - `cli.py::_serve` — mounts the returned app behind uvicorn for the real
-  `ai-report serve` process.
+  `ai-report serve` process, passing an `on_patrol_end` callback that
+  schedules `orchestration.py::run_patrol_pipeline` as a background task.
 - `devtools/fake_rover.py::_post_event_http` — sends the real
   `POST /api/events` requests this module receives, when not using
   `--udp-fallback`.
@@ -18,22 +19,32 @@ Called by:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from fastapi import FastAPI
 
 from ai_report.ingest.store import Store
-from ai_report.models import EventMessage
+from ai_report.models import EventMessage, EventType
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(store: Store) -> FastAPI:
+def create_app(store: Store, on_patrol_end: Callable[[str], None] | None = None) -> FastAPI:
     """Build a FastAPI app exposing `POST /api/events`, bound to `store`.
 
     A factory rather than a module-level `app = FastAPI()` singleton so
     every caller (the real server, every test) supplies its own `Store` and
     the handler closes over it — this keeps tests fully isolated (a fresh
     SQLite file per test) without any global state.
+
+    `on_patrol_end`, when given, is called with `event.patrol_id` exactly
+    once per newly-stored `PATROL_END` event (never for a duplicate
+    delivery, never for any other event type) — GUIDELINES.md: "No
+    scheduling / cron / APScheduler. WEB triggers patrols. We react to
+    PATROL_END." `cli.py::_serve` is the only production caller that passes
+    one; it's optional so `tests/test_event_api.py` and
+    `devtools/fake_rover.py` can keep using this factory without triggering
+    the pipeline.
 
     Called by `cli.py::_serve` and directly by `tests/test_event_api.py`.
     """
@@ -48,7 +59,9 @@ def create_app(store: Store) -> FastAPI:
         line, it short-circuits to a 422 response. Called by FastAPI's
         routing for every request to `POST /api/events`; calls
         `Store.insert_event`, whose return value (False on primary-key
-        collision) becomes the `duplicate` field in the response.
+        collision) becomes the `duplicate` field in the response, and —
+        for a newly-stored `PATROL_END` — fires `on_patrol_end` before
+        returning.
         """
         inserted = store.insert_event(event)
         if not inserted:
@@ -57,6 +70,8 @@ def create_app(store: Store) -> FastAPI:
                 event.patrol_id,
                 event.event_seq,
             )
+        elif event.type == EventType.PATROL_END and on_patrol_end is not None:
+            on_patrol_end(event.patrol_id)
         return {"status": "accepted", "duplicate": not inserted}
 
     return app

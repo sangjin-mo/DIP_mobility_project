@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import ValidationError
@@ -46,13 +47,19 @@ class TelemetryUDPProtocol(asyncio.DatagramProtocol):
     without querying the database.
     """
 
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, on_patrol_end: Callable[[str], None] | None = None) -> None:
         """Store a reference to the shared `Store` and zero the counters.
 
-        Called once by the `lambda: TelemetryUDPProtocol(store)` factory
-        passed to `loop.create_datagram_endpoint` in `create_udp_listener`.
+        `on_patrol_end`, when given, mirrors `event_api.py::create_app`'s
+        parameter of the same name exactly — called with `evt.patrol_id`
+        once per newly-stored `PATROL_END` event on this fallback path too,
+        so a DR that can only reach AI over UDP still triggers the pipeline.
+
+        Called once by the factory passed to `loop.create_datagram_endpoint`
+        in `create_udp_listener`.
         """
         self._store = store
+        self._on_patrol_end = on_patrol_end
         self.transport: asyncio.DatagramTransport | None = None
         self.telemetry_received = 0
         self.events_received = 0
@@ -102,8 +109,10 @@ class TelemetryUDPProtocol(asyncio.DatagramProtocol):
                 self.telemetry_received += 1
             elif msg_type in _EVENT_TYPE_VALUES:
                 evt = EventMessage.model_validate(raw)
-                self._store.insert_event(evt)
+                inserted = self._store.insert_event(evt)
                 self.events_received += 1
+                if inserted and evt.type == EventType.PATROL_END and self._on_patrol_end is not None:
+                    self._on_patrol_end(evt.patrol_id)
             else:
                 logger.warning("unknown UDP message type %r from %s", msg_type, addr)
                 self.malformed_count += 1
@@ -139,21 +148,25 @@ class TelemetryUDPProtocol(asyncio.DatagramProtocol):
 
 
 async def create_udp_listener(
-    store: Store, host: str = "0.0.0.0", port: int = 9100
+    store: Store,
+    host: str = "0.0.0.0",
+    port: int = 9100,
+    on_patrol_end: Callable[[str], None] | None = None,
 ) -> tuple[asyncio.DatagramTransport, TelemetryUDPProtocol]:
     """Bind a UDP socket on `host:port` and start routing datagrams into `store`.
 
     Thin wrapper around `loop.create_datagram_endpoint` that fixes the
-    protocol factory to `TelemetryUDPProtocol(store)`. Returns both the
-    transport (call `.close()` on it to stop listening) and the protocol
-    instance (read its counters for diagnostics/tests).
+    protocol factory to `TelemetryUDPProtocol(store, on_patrol_end)`.
+    Returns both the transport (call `.close()` on it to stop listening)
+    and the protocol instance (read its counters for diagnostics/tests).
 
-    Called by `cli.py::_serve` (with the real configured host/port) and
-    directly by `tests/test_udp_listener.py` / `tests/test_a1_acceptance.py`
-    (with an ephemeral port from `tests/conftest.py::free_udp_port`).
+    Called by `cli.py::_serve` (with the real configured host/port and its
+    `on_patrol_end` callback) and directly by `tests/test_udp_listener.py` /
+    `tests/test_a1_acceptance.py` (with an ephemeral port from
+    `tests/conftest.py::free_udp_port`, no callback).
     """
     loop = asyncio.get_running_loop()
     transport, protocol = await loop.create_datagram_endpoint(
-        lambda: TelemetryUDPProtocol(store), local_addr=(host, port)
+        lambda: TelemetryUDPProtocol(store, on_patrol_end), local_addr=(host, port)
     )
     return transport, protocol

@@ -45,6 +45,7 @@ These emerged from ADRs. They are real requirements and need tests, but no custo
 | D_005 | Unknown VIS state enum values must raise, never coerce | ICD C2.3 | `test_unknown_state_raises` (ingest), `test_unknown_vis_state_raises_rather_than_coerces` (aggregate) | A2 | ✓ |
 | D_006 | Output must use 관측 수, never 개체 수 | ADR-0006 | `test_scan_prohibited_language_detects_plant_count_words` | A5 | ✓ |
 | D_007 | Fixtures must validate against contract schemas | ADR-0008 | `contracts/validate.py` in CI | A0 | WIP — script exists and passes, but `contracts/fixtures/patrol_20260813_1430/` has no actual data files yet, only a README of hand-computed expected values |
+| D_008 | A fresh patrol must trigger the full report pipeline automatically on `PATROL_END`, with no cron/scheduling (GUIDELINES.md: "We react to PATROL_END") | `ai_report/CALL_MAP.md`'s "What's wired up now" | `orchestration.py`, `cli.py::_make_patrol_end_trigger`, `ingest/event_api.py`, `ingest/udp_listener.py` | `test_full_pipeline_writes_a_complete_report`, `test_proceeds_without_vis_complete_after_timeout`, `test_unknown_vis_state_is_caught_and_returns_none` (`tests/test_orchestration.py`); `test_patrol_end_fires_on_patrol_end_callback`, `test_patrol_end_callback_not_fired_twice_for_a_duplicate_delivery` (`tests/test_event_api.py`); `test_patrol_end_fires_on_patrol_end_callback_via_udp_fallback` (`tests/test_udp_listener.py`) | A2 | ✓ |
 
 ---
 

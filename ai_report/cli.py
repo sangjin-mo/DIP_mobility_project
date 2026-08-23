@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
@@ -25,11 +26,54 @@ from ai_report.ingest.store import Store
 from ai_report.ingest.udp_listener import create_udp_listener
 from ai_report.llm.client import generate_report
 from ai_report.models import Payload
+from ai_report.orchestration import run_patrol_pipeline
 from ai_report.pipeline.payload import load_payload, payload_to_aggregate, write_payload
 from ai_report.render.markdown import render_report
 from ai_report.storage.layout import write_report
 
 logger = logging.getLogger(__name__)
+
+
+def _make_patrol_end_trigger(store: Store, settings: Settings) -> tuple[Callable[[str], None], set]:
+    """Build the `on_patrol_end` callback `_serve` passes to both ingest paths.
+
+    Returns `(trigger, background_tasks)`. `trigger(patrol_id)` schedules
+    `orchestration.py::run_patrol_pipeline` as a fire-and-forget
+    `asyncio.Task` — GUIDELINES.md: "We react to PATROL_END", and A1's
+    ingest handlers (`event_api.py::post_event`, `udp_listener.py::_handle`)
+    must return immediately, not block on a report that can take minutes
+    (LLM retries included).
+
+    `background_tasks` is a plain `set` the caller must keep alive for the
+    life of the server: asyncio only holds a *weak* reference to a task
+    created via `asyncio.create_task` and not otherwise referenced, so an
+    unreferenced task can be garbage-collected mid-run — a well-known
+    asyncio pitfall. `trigger` adds each task to this set and removes it via
+    `add_done_callback` once finished, so the set's steady-state size is the
+    number of patrols currently being processed, not ever-growing.
+
+    A `patrol_id` already scheduled (its `PATROL_END` re-delivered, e.g. a
+    UDP fallback repeat racing the HTTP primary) is not scheduled twice —
+    `run_patrol_pipeline` makes one real LLM call per invocation, and
+    silently double-spending that isn't something `Store.insert_event`'s
+    dedup alone prevents, since it dedups by `(patrol_id, event_seq)`, not
+    by `patrol_id` alone, and DR is free to reuse the same `PATROL_END`
+    `event_seq` on both channels or not — the ICD doesn't guarantee either
+    way. Called by `_serve`.
+    """
+    background_tasks: set = set()
+    triggered_patrol_ids: set[str] = set()
+
+    def trigger(patrol_id: str) -> None:
+        if patrol_id in triggered_patrol_ids:
+            logger.info("patrol_id=%s already triggered; ignoring re-delivery", patrol_id)
+            return
+        triggered_patrol_ids.add(patrol_id)
+        task = asyncio.create_task(run_patrol_pipeline(patrol_id, store, settings))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+    return trigger, background_tasks
 
 
 async def _serve(host: str) -> None:
@@ -38,19 +82,28 @@ async def _serve(host: str) -> None:
     Both share one `Store` (see `ingest/store.py`) and both run as
     callbacks on this same asyncio event loop — the UDP transport via
     `create_udp_listener`, the HTTP API via `uvicorn.Server.serve()` awaited
-    directly rather than spawned as a separate process. `await server.serve()`
-    blocks here until the process receives a shutdown signal; the `finally`
-    block then closes the UDP transport and the `Store`'s SQLite connection.
+    directly rather than spawned as a separate process. Both are also given
+    the same `on_patrol_end` trigger from `_make_patrol_end_trigger`, so a
+    `PATROL_END` event newly stored via either channel schedules
+    `orchestration.py::run_patrol_pipeline` in the background — see that
+    module for what runs once triggered. `await server.serve()` blocks here
+    until the process receives a shutdown signal; the `finally` block then
+    closes the UDP transport and the `Store`'s SQLite connection. In-flight
+    patrol pipeline tasks are not explicitly awaited or cancelled on
+    shutdown — `store.close()` running out from under a task already
+    mid-`generate_report` call is an accepted risk of process shutdown, no
+    different from any other in-flight request being interrupted.
 
     Called by `main` when the `serve` subcommand is used.
     """
     settings = get_settings()
     store = Store(settings.sqlite_path)
+    on_patrol_end, _background_tasks = _make_patrol_end_trigger(store, settings)
 
-    transport, _ = await create_udp_listener(store, host=host, port=settings.UDP_PORT)
+    transport, _ = await create_udp_listener(store, host=host, port=settings.UDP_PORT, on_patrol_end=on_patrol_end)
     print(f"UDP telemetry/event listener on {host}:{settings.UDP_PORT}")
 
-    app = create_app(store)
+    app = create_app(store, on_patrol_end=on_patrol_end)
     config = uvicorn.Config(app, host=host, port=settings.EVENT_PORT, log_level="info")
     server = uvicorn.Server(config)
     print(f"HTTP event API on {host}:{settings.EVENT_PORT}")

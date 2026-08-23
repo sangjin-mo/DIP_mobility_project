@@ -1,26 +1,30 @@
 # Call map
 
 Which function calls which, and who runs each module. Covers A1
-(`ingest/` + `devtools/`), A2 (`pipeline/segment.py`, `pipeline/aggregate.py`),
-A3 (`render/` + `storage/`), A4 (`pipeline/select_images.py`,
-`pipeline/payload.py`), A5 (`llm/`), and A6 (`cli.py regenerate`). See
-`../02-ai-subsystem-spec.md` §2 for the intended full module layout and
-`../01-interface-contracts.md` for the contracts these modules implement.
+(`ingest/` + `devtools/`), A2 (`pipeline/segment.py`, `pipeline/aggregate.py`,
+and now `orchestration.py`), A3 (`render/` + `storage/`), A4
+(`pipeline/select_images.py`, `pipeline/payload.py`), A5 (`llm/`), and A6
+(`cli.py regenerate`). See `../02-ai-subsystem-spec.md` §2 for the intended
+full module layout and `../01-interface-contracts.md` for the contracts
+these modules implement.
 
-**There is still no production orchestration for a *fresh* patrol.**
-Nothing in this codebase yet calls `segment_patrol` → `aggregate` →
-`apply_image_selection` → `build_payload` → `llm.client.generate_report` →
-`render_report` → `write_report` automatically when a patrol finishes
-(`PATROL_END` + VIS `_COMPLETE`) — that glue is a later addition (likely
-`cli.py`, once the trigger condition needs watching for). `cli.py
-regenerate {patrol_id}` (A6) *is* fully wired production code, but it's a
-different, narrower path — see "The regenerate path" below — that only
-works for a patrol whose `payload.json` already exists from some earlier
-run. Today the fresh-patrol chain is only exercised by tests and by manual
-scripts, such as the one used to smoke-test A2–A5 end to end against a
-real running server (with a mocked OpenAI client — GUIDELINES.md's API key is
-never touched by anything in this repo's own test/smoke tooling). See
-"What's not wired up yet" at the bottom.
+**Production orchestration for a *fresh* patrol now exists** —
+`orchestration.py::run_patrol_pipeline`. `cli.py::_serve` passes an
+`on_patrol_end` callback into both `ingest/event_api.py::create_app` and
+`ingest/udp_listener.py::create_udp_listener`; the moment either ingest
+path stores a new (non-duplicate) `PATROL_END` event, that callback
+schedules `run_patrol_pipeline` as a background `asyncio` task, which waits
+for VIS's `_COMPLETE` marker (or times out per spec §12) and then runs
+`segment_patrol` → `aggregate` → `apply_image_selection` →
+`build_payload` → `llm.client.generate_report` → `render_report` →
+`write_report` — see "The A2–A5 pipeline" below for the exact chain, and
+`tests/test_orchestration.py` for the tests exercising it end to end
+against a real `Store`, always with a mocked LLM client (GUIDELINES.md:
+"No network calls in any test"). `cli.py regenerate {patrol_id}` (A6)
+remains a separate, narrower path — see "The regenerate path" below — for
+rebuilding a report whose `payload.json` already exists, e.g. for prompt
+tuning; it does not call `run_patrol_pipeline` and still has no `Store` or
+`Settings.DATA_ROOT` access at all.
 
 ## Three runtime processes, one shared package
 
@@ -55,8 +59,9 @@ flowchart TB
 
     SERVE --> GETSET1["config.get_settings()"]
     SERVE --> STORE1["ingest.store.Store(...)"]
-    SERVE --> UDPCREATE["ingest.udp_listener.create_udp_listener()"]
-    SERVE --> APPCREATE["ingest.event_api.create_app()"]
+    SERVE --> TRIGGER["cli._make_patrol_end_trigger(store, settings)\n-> on_patrol_end(patrol_id)"]
+    SERVE --> UDPCREATE["ingest.udp_listener.create_udp_listener(..., on_patrol_end)"]
+    SERVE --> APPCREATE["ingest.event_api.create_app(store, on_patrol_end)"]
     APPCREATE -->|"mounted in"| UVICORN["uvicorn.Server.serve()"]
 
     FRREPLAY -- "UDP :9100\ntelemetry, +events if --udp-fallback" --> UDPPROTO["udp_listener.TelemetryUDPProtocol"]
@@ -66,8 +71,13 @@ flowchart TB
     UDPPROTO --> STOREW1["Store.insert_telemetry() / insert_event()"]
     POSTEVENT --> STOREW2["Store.insert_event()"]
 
+    STOREW1 -.->|"new PATROL_END"| TRIGGER
+    STOREW2 -.->|"new PATROL_END"| TRIGGER
+    TRIGGER -.->|"asyncio.create_task"| RUNPIPE["orchestration.run_patrol_pipeline()"]
+
     FVWRITE -- "writes JSON files to\ndata/analysis/{patrol_id}/" --> DISK[("filesystem")]
-    DISK -. "read by (A2 orchestration,\ncurrently exercised only in tests)" .-> WATCHER["vis_watcher.VisWatcher.scan_once()"]
+    DISK -. "polled by" .-> WATCHER["vis_watcher.VisWatcher.watch()"]
+    RUNPIPE --> WATCHER
     WATCHER --> STOREW3["Store.insert_analysis()"]
 
     STOREW1 --> DB[("SQLite: sessions.db")]
@@ -75,11 +85,17 @@ flowchart TB
     STOREW3 --> DB
 ```
 
-## The A2–A5 pipeline (no automatic trigger yet)
+## The A2–A5 pipeline
 
 Given a `patrol_id`, this is the chain that turns ingested rows into a
-report on disk. Every arrow below is a real function call once something
-invokes `segment_patrol`; nothing currently does that automatically.
+report on disk. In production it runs inside
+`orchestration.py::run_patrol_pipeline`, scheduled by the `on_patrol_end`
+trigger above; `tests/test_orchestration.py` exercises the same function
+directly against a `Store` it populates itself. `tests/test_cli_regenerate.py`
+exercises the same sequence of calls a second, independent way — feeding
+segmentation already-loaded in-memory lists instead of a `Store` — to prove
+A6's `regenerate` path produces an equivalent report without any database
+access.
 
 ```mermaid
 flowchart LR
@@ -230,7 +246,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `.connection_made` | — | asyncio (framework callback) |
 | `.datagram_received` | `._handle` | asyncio (framework callback) |
 | `.error_received` | — | asyncio (framework callback) |
-| `._handle` | `._parse_json`, `TelemetryPacket.model_validate`, `EventMessage.model_validate`, `Store.insert_telemetry`, `Store.insert_event` | `.datagram_received` |
+| `._handle` | `._parse_json`, `TelemetryPacket.model_validate`, `EventMessage.model_validate`, `Store.insert_telemetry`, `Store.insert_event`, `self._on_patrol_end(evt.patrol_id)` when given and the event is a newly-stored `PATROL_END` | `.datagram_received` |
 | `._parse_json` | — | `._handle` |
 | `create_udp_listener` | `loop.create_datagram_endpoint` | `cli.py::_serve`; `tests/test_udp_listener.py`; `tests/test_a1_acceptance.py` |
 
@@ -239,25 +255,33 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | Function | Calls | Called by |
 |---|---|---|
 | `create_app` | `FastAPI()` | `cli.py::_serve`; `tests/test_event_api.py` |
-| `post_event` (inner handler) | `Store.insert_event` | FastAPI routing (framework callback), triggered by `devtools/fake_rover.py::_post_event_http` in real use or `TestClient` in tests |
+| `post_event` (inner handler) | `Store.insert_event`; `on_patrol_end(event.patrol_id)` when given and the event is a newly-stored `PATROL_END` | FastAPI routing (framework callback), triggered by `devtools/fake_rover.py::_post_event_http` in real use or `TestClient` in tests |
 
 ### `ingest/vis_watcher.py`
 
 | Function | Calls | Called by |
 |---|---|---|
-| `VisWatcher.__init__` | — | tests; intended future A2 orchestration |
+| `VisWatcher.__init__` | — | `orchestration.py::run_patrol_pipeline`; tests |
 | `.scan_once` | `AnalysisResult.model_validate`, `Store.insert_analysis` | `.watch`; tests directly |
-| `.watch` | `.scan_once` | tests directly; intended future A2 orchestration (on `PATROL_END`) |
+| `.watch` | `.scan_once` | `orchestration.py::run_patrol_pipeline`; tests directly |
 
 ### `cli.py`
 
 | Function | Calls | Called by |
 |---|---|---|
-| `_serve` | `get_settings`, `Store`, `create_udp_listener`, `create_app`, `uvicorn.Server.serve` | `main` |
+| `_make_patrol_end_trigger` | — (returns a closure, `trigger`) | `_serve` |
+| `trigger` (the closure `_make_patrol_end_trigger` returns) | `asyncio.create_task(orchestration.run_patrol_pipeline(...))` | passed as `on_patrol_end` to `create_udp_listener` and `create_app`; called by `udp_listener.py::TelemetryUDPProtocol._handle` and `event_api.py::post_event` |
+| `_serve` | `get_settings`, `Store`, `_make_patrol_end_trigger`, `create_udp_listener`, `create_app`, `uvicorn.Server.serve` | `main` |
 | `_write_images` | — | passed to `storage/layout.py::write_report` via `extra_writers`, from `_regenerate` |
 | `_load_report_images` | — | `_regenerate` |
 | `_regenerate` | `pipeline/payload.py::load_payload`/`payload_to_aggregate`, `_load_report_images`, `llm/client.py::generate_report`, `render/markdown.py::render_report`, `storage/layout.py::write_report`, `pipeline/payload.py::write_payload`, `_write_images` | `main`; directly by `tests/test_cli_regenerate.py` |
 | `main` | `_serve` or `_regenerate` (via `asyncio.run`, depending on subcommand) | the `ai-report` console script; `if __name__ == "__main__"` |
+
+### `orchestration.py`
+
+| Function | Calls | Called by |
+|---|---|---|
+| `run_patrol_pipeline` | `ingest/vis_watcher.py::VisWatcher.watch`, `Store.telemetry_for_patrol`/`events_for_patrol`/`analysis_for_patrol`/`received_telemetry_seqs`/`max_telemetry_seq`, `pipeline/segment.py::segment_patrol`, `pipeline/aggregate.py::aggregate`, `pipeline/select_images.py::apply_image_selection`/`load_selected_images`/`copy_and_resize_images`, `pipeline/payload.py::build_payload`/`write_payload`, `llm/client.py::generate_report`, `render/markdown.py::render_report`, `storage/layout.py::write_report` | `cli.py::_make_patrol_end_trigger`'s `trigger` closure (production, as a background `asyncio.Task`); directly by `tests/test_orchestration.py` |
 
 ### `devtools/fake_rover.py`
 
@@ -283,7 +307,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 
 | Function | Calls | Called by |
 |---|---|---|
-| `segment_patrol` | `_first_ts`, `_last_ts`, `_boundaries_from_events` or `_boundaries_from_distance`, `_build_windows` | `tests/test_segment.py`; whatever loads a patrol (A2 orchestration, not yet written) |
+| `segment_patrol` | `_first_ts`, `_last_ts`, `_boundaries_from_events` or `_boundaries_from_distance`, `_build_windows` | `tests/test_segment.py`; `orchestration.py::run_patrol_pipeline` |
 | `_first_ts` / `_last_ts` | — | `segment_patrol` |
 | `_boundaries_from_events` | — | `segment_patrol`, when any `ZONE_ENTER` events exist |
 | `_boundaries_from_distance` | — | `segment_patrol`, fallback path; also called directly by `tests/test_segment.py` to unit-test the distance-integration mechanic in isolation |
@@ -296,7 +320,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 
 | Function | Calls | Called by |
 |---|---|---|
-| `aggregate` | `_aggregate_zone`, `_worst_status`, `_patrol_date`; constructs `PatrolAggregate`/`DataCompleteness`/`LlmMetadata` | `tests/test_aggregate.py`; whatever runs the pipeline for a patrol (A2 orchestration, not yet written) |
+| `aggregate` | `_aggregate_zone`, `_worst_status`, `_patrol_date`; constructs `PatrolAggregate`/`DataCompleteness`/`LlmMetadata` | `tests/test_aggregate.py`; `orchestration.py::run_patrol_pipeline` |
 | `_patrol_date` | — | `aggregate` |
 | `_worst_status` | — | `aggregate` |
 | `_stat` | — | `_aggregate_zone` |
@@ -315,7 +339,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_build_zone_views` | `_env_line`, `_observation_lines`, `_obstruction_line`, `_recommendation_line`, `_image_note`, `_env_note_suffix` | `render_report` |
 | `_llm_recommendation_lines` | — | `render_report` |
 | `_jinja_env` | `jinja2.Environment(...)` | `render_report` |
-| `render_report` | `_build_zone_views`, `_llm_recommendation_lines`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; `cli.py::_regenerate` (A6, real production caller); the fresh-patrol chain's caller doesn't exist yet |
+| `render_report` | `_build_zone_views`, `_llm_recommendation_lines`, `_jinja_env`, renders `templates/report.md.j2` | `tests/test_markdown.py`; `cli.py::_regenerate` (A6) and `orchestration.py::run_patrol_pipeline` (fresh-patrol chain) — both real production callers |
 
 ### `pipeline/select_images.py`
 
@@ -323,7 +347,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 |---|---|---|
 | `_count_state` / `_has_state` | — | `select_images_for_zone` |
 | `select_images_for_zone` | `_count_state`, `_has_state`, `statistics.median` | `apply_image_selection`; directly by `tests/test_select_images.py` |
-| `apply_image_selection` | `select_images_for_zone`, `PatrolSegmentation.zones` | whatever runs the pipeline for a patrol; `tests/test_select_images.py` |
+| `apply_image_selection` | `select_images_for_zone`, `PatrolSegmentation.zones` | `orchestration.py::run_patrol_pipeline`; `tests/test_select_images.py` |
 | `_resize_image_bytes` | `PIL.Image.open`/`.thumbnail`/`.save` | `copy_and_resize_images`, `load_selected_images` |
 | `_selected_image_sources` | `PatrolSegmentation.zones` | `copy_and_resize_images`, `load_selected_images` |
 | `copy_and_resize_images` | `_selected_image_sources`, `_resize_image_bytes` | passed to `storage/layout.py::write_report` via `extra_writers`; directly by `tests/test_select_images.py` |
@@ -335,7 +359,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 |---|---|---|
 | `estimate_tokens` | — | `build_payload`, once per candidate image budget |
 | `_truncate_images` | — | `build_payload` |
-| `build_payload` | `PatrolSegmentation.obstruction_counts`, `estimate_tokens`, `_truncate_images`; constructs `Payload` | whatever runs the pipeline for a patrol; `tests/test_payload.py` |
+| `build_payload` | `PatrolSegmentation.obstruction_counts`, `estimate_tokens`, `_truncate_images`; constructs `Payload` | `orchestration.py::run_patrol_pipeline`; `tests/test_payload.py` |
 | `write_payload` | — | passed to `storage/layout.py::write_report` via `extra_writers`; directly by `tests/test_payload.py` |
 | `load_payload` | `Payload.model_validate_json` | `cli.py::_regenerate`; directly by `tests/test_payload.py` |
 | `payload_to_aggregate` | constructs `PatrolAggregate` | `cli.py::_regenerate`; directly by `tests/test_payload.py` |
@@ -373,29 +397,45 @@ by `llm/client.py::_build_messages` as the API request's system message.
 | `_scan_prohibited_language` | — | `generate_report`; directly by `tests/test_llm_client.py`'s adversarial-fixture tests |
 | `_drop_unknown_zones` | — | `generate_report` |
 | `_call_with_retry` | `client.chat.completions.create` (the only real network call anywhere in this codebase), `asyncio.sleep` | `generate_report` |
-| `generate_report` | `_build_messages`, `output_json_schema`, `_call_with_retry`, `LlmReportOutput.model_validate_json`, `_scan_prohibited_language`, `_drop_unknown_zones`, `_compute_cost_usd`; constructs `LlmMetadata` | whatever runs the pipeline for a patrol, right after `pipeline/payload.py::build_payload`; `tests/test_llm_client.py` (always with an injected mock `client`, never a real `AsyncOpenAI`) |
+| `generate_report` | `_build_messages`, `output_json_schema`, `_call_with_retry`, `LlmReportOutput.model_validate_json`, `_scan_prohibited_language`, `_drop_unknown_zones`, `_compute_cost_usd`; constructs `LlmMetadata` | `orchestration.py::run_patrol_pipeline`, right after `pipeline/payload.py::build_payload`, and `cli.py::_regenerate`; `tests/test_llm_client.py`/`tests/test_orchestration.py`/`tests/test_cli_regenerate.py` (always with an injected mock `client`, never a real `AsyncOpenAI`) |
 
-## What's not wired up yet
+## What's wired up now, and what still isn't
 
-Nothing yet calls the A2–A5 chain (`segment_patrol` → `aggregate` →
-`apply_image_selection` → `build_payload` → `llm.client.generate_report` →
-`render_report` → `write_report`) automatically on `PATROL_END` + VIS
-`_COMPLETE` — see this doc's intro. `VisWatcher.watch` is the other
-still-unwired piece: it exists for A1's polling-until-complete behaviour,
-but nothing calls it outside tests either. The fresh-patrol chain is
-reachable today only from tests and from ad hoc scripts, such as the
-manual smoke test (real `ai-report serve` process, real
-`fake_rover`/`fake_vis` traffic, then a short script running the full
-A1–A5 chain by hand — including a mocked `AsyncOpenAI` client, since no
-test or smoke script in this repo ever makes a real LLM call — and
-`write_report`'s `extra_writers`) used to verify A2–A5 end to end.
+The A2–A5 chain (`segment_patrol` → `aggregate` → `apply_image_selection`
+→ `build_payload` → `llm.client.generate_report` → `render_report` →
+`write_report`) now runs automatically on `PATROL_END` + VIS `_COMPLETE` —
+`orchestration.py::run_patrol_pipeline`, triggered by `cli.py::_serve`'s
+`on_patrol_end` callback (see this doc's intro and "Three runtime
+processes" above). `VisWatcher.watch` is called for real too, from inside
+`run_patrol_pipeline`, with the timeout/poll-interval settings
+(`VIS_COMPLETE_TIMEOUT_S`/`VIS_WATCHER_POLL_INTERVAL_S`) `config.py` had
+already declared for exactly this call. `tests/test_orchestration.py`
+verifies the whole chain against a real `Store` it populates itself
+(`fake_rover`'s telemetry/events inserted the way real ingest would,
+`fake_vis`'s analysis JSON + placeholder JPEGs written to `DATA_ROOT`),
+always with a mocked LLM client — no test or smoke script in this repo
+ever makes a real LLM call. `tests/test_event_api.py` and
+`tests/test_udp_listener.py` separately verify the trigger itself: a new
+`PATROL_END` fires `on_patrol_end` exactly once, a duplicate delivery or
+any other event type doesn't, and `cli.py::_make_patrol_end_trigger`
+additionally dedups by `patrol_id` so a `PATROL_END` re-delivered on both
+the HTTP and UDP channels can't schedule (and bill) two LLM calls for the
+same patrol.
 
-**`cli.py regenerate` is the exception** — it's real, wired, callable
-production code today, verified as an actual subprocess (`python -m
+**`cli.py regenerate` remains a separate, narrower path** — real, wired,
+callable production code, verified as an actual subprocess (`python -m
 ai_report.cli regenerate {patrol_id}`) against a report built by the
 fresh-patrol chain, with `data/` deleted first to prove no rover/database
-access happens. What A6 doesn't add: a way to build the *first* report for
-a patrol automatically — `regenerate` only works once a `payload.json`
-already exists from some earlier run (manual, in this repo, until
-orchestration lands) and is meant for prompt-tuning iteration (spec §11),
-not initial report generation.
+access happens. It does not call `run_patrol_pipeline` and still has no
+`Store`/`Settings.DATA_ROOT`/UDP/HTTP access at all — `regenerate` only
+works once a `payload.json` already exists (now produced automatically by
+`run_patrol_pipeline`, rather than only "some earlier manual run") and is
+meant for prompt-tuning iteration (spec §11), not initial report
+generation — `run_patrol_pipeline` is what builds the *first* report for a
+patrol.
+
+Not wired up: in-flight `run_patrol_pipeline` tasks are not tracked past
+`_serve`'s own background-task set, so a server shutdown while a patrol's
+report is still being built does not wait for or gracefully cancel it —
+see `_serve`'s docstring for why that's an accepted risk rather than an
+oversight.

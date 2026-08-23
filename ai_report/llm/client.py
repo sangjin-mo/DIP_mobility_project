@@ -189,10 +189,11 @@ async def generate_report(
         return None, LlmMetadata(enabled=False)
 
     own_client = client is None
-    if own_client:
-        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=settings.LLM_TIMEOUT_S)
 
     try:
+        if own_client:
+            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=settings.LLM_TIMEOUT_S)
+
         messages = _build_messages(payload, images)
         schema = output_json_schema()
 
@@ -236,5 +237,7 @@ async def generate_report(
         logger.exception("LLM call failed unexpectedly; falling back")
         return None, LlmMetadata(enabled=False)
     finally:
-        if own_client:
+        # `client` can still be None here if constructing it (inside the
+        # try above) is exactly what failed -- guard against closing None.
+        if own_client and client is not None:
             await client.close()

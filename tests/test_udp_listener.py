@@ -100,3 +100,20 @@ async def test_event_via_udp_fallback(listener):
     events = store.events_for_patrol(PATROL_ID)
     assert len(events) == 1
     assert events[0].type.value == "PATROL_START"
+
+
+async def test_patrol_end_fires_on_patrol_end_callback_via_udp_fallback(tmp_path: Path):
+    store = Store(tmp_path / "sessions.db")
+    port = free_udp_port()
+    triggered = []
+    transport, _protocol = await create_udp_listener(
+        store, host="127.0.0.1", port=port, on_patrol_end=triggered.append
+    )
+    try:
+        _send(port, {"patrol_id": PATROL_ID, "event_seq": 0, "ts_ms": 0, "type": "PATROL_END"})
+        _send(port, {"patrol_id": PATROL_ID, "event_seq": 0, "ts_ms": 0, "type": "PATROL_END"})  # C1.2 resend
+        await asyncio.sleep(0.05)
+        assert triggered == [PATROL_ID]  # fired once, not on the deduped resend
+    finally:
+        transport.close()
+        store.close()

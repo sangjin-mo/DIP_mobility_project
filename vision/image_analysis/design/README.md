@@ -71,3 +71,30 @@ YOLO-World는 박스+클래스+confidence만 주므로, 아래처럼 규칙 기�
 - VIS 파트가 실제로 구현·유지보수하는 범위는 `①이미지 저장 → ②전송`(`features/image_transfer/`)까지이며, 여기서 만든 이미지를 LLM API로 넘기는 연동 지점까지만 관여
 - 1번에 정리된 YOLO-World/Florence-2 모델 비교, 판정 규칙, JSON 스키마안은 **채택되지 않은 검토 이력**일 뿐, VIS 파트가 앞으로 구현·검증해야 할 항목이 아님
 - 따라서 분석 정확도·모델 교체·판정 임계값 튜닝 등에 대한 후속 논의는 VIS 파트가 아니라 **LLM API 담당자**와 진행되어야 함
+
+## 4. 2026-08-23 업데이트 — 실제로 구현됨
+
+위 2번에서 말한 "다른 담당자의 LLM API 호출" 단계를 실제로 구현한 스크립트가
+`vision/image_analysis/system/classify.py`에 추가되었다. `ai_report/` 코드는
+전혀 건드리지 않고, `01-interface-contracts.md` §C2.1/§C2.2가 정의하는
+파일 계약(`data/images/{patrol_id}/`, `data/analysis/{patrol_id}/*.json`,
+`_COMPLETE` 마커)만 채워 넣는다.
+
+```bash
+python -m vision.image_analysis.system.classify \
+    --patrol-id 20260824_0900 \
+    --source-dir vision/image_transfer/system/pc_server/received/2026-08-20
+```
+
+`--patrol-id`는 자동 판별하지 않는다 — 촬영된 파일명(`received/{date}/{ts}_cam01_{seq}.jpg`)만으로는
+어떤 순찰(patrol)에 속하는지 알 수 없고, 잘못 추정하면 구역 판정
+(`pipeline/segment.py`, hard rule 4)이 조용히 틀어지기 때문에 사람이 직접
+지정하도록 했다 — `devtools/fake_vis.py --patrol-id`와 동일한 방식이다.
+
+실제 API로 검증됨: `vision/image_transfer/system/pc_server/received/`의
+실제 사진 2장(천장 조명 사진)으로 실행해, 정상적으로 "작물 없음" (`detections: []`)
+결과를 반환하고 `data/analysis/{patrol_id}/{image_id}.json` + `_COMPLETE`가
+올바르게 생성되는 것을 확인했다. 테스트는 `tests/test_vision_classify.py` —
+특히 `ai_report.ingest.vis_watcher.VisWatcher.scan_once`(운영 코드에서
+`orchestration.py::run_patrol_pipeline`이 실제로 호출하는 바로 그 함수)로
+직접 재소비해보는 라운드트립 테스트가 계약 준수를 가장 강하게 증명한다.

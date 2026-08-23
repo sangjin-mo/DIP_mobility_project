@@ -34,6 +34,7 @@ ai_report/
 ├── config.py               # pydantic-settings; all thresholds
 ├── models.py               # pydantic models for every schema
 ├── cli.py                  # entry points
+├── orchestration.py        # reacts to PATROL_END: runs ①-⑤ for one patrol
 ├── ingest/
 │   ├── udp_listener.py     # C1.1
 │   ├── event_api.py        # C1.2, FastAPI

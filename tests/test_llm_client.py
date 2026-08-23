@@ -137,6 +137,23 @@ async def test_unexpected_exception_never_propagates():
     assert metadata.enabled is False
 
 
+async def test_missing_api_key_falls_back_gracefully_instead_of_raising():
+    """Regression test: no `client=` injected (the real production path, which
+    constructs its own `AsyncOpenAI` from `settings.OPENAI_API_KEY`) plus no
+    API key configured used to raise `openai.OpenAIError` straight out of
+    `generate_report` — the client construction happened outside the
+    function's own `try`, so its "never raises" guarantee didn't cover it.
+    This is exactly what an unconfigured `OPENAI_API_KEY` produced in
+    production (surfaced as an uncaught 500 through
+    `web_dashboard`'s `/api/crop-report/generate`, since nothing upstream of
+    `generate_report` expects it to raise either).
+    """
+    settings = get_settings().model_copy(update={"OPENAI_API_KEY": None})
+    output, metadata = await generate_report(make_payload(), {}, valid_zone_ids=set(), settings=settings)
+    assert output is None
+    assert metadata.enabled is False
+
+
 async def test_unknown_zone_id_dropped_and_logged(caplog: pytest.LogCaptureFixture):
     settings = get_settings()
     client = mock_client(return_value=mock_response(valid_output_dict(zone_ids=[1, 99])))
