@@ -1,9 +1,9 @@
-# 2호기 -> PC web_dashboard 클라이언트 (가속/감속·하트비트 전용)
+# 2호기 -> PC web_dashboard 클라이언트
 #
-# 정지/재출발과 달리 가속·감속은 안전필수 기능이 아니므로 PC를 경유함
-# (../../../mediapipe/design/README.md §3-1-1, §3-2 참고). PC의 web_dashboard가
-# 이미 갖고 있는 /api/control/start 재호출 방식(속도 슬라이더와 동일 메커니즘)을
-# 그대로 사용 — 새 엔드포인트를 PC 쪽에 추가할 필요 없음.
+# 2026-08-22: 정지(표지판·주먹)도 이 클라이언트로 통일함 — "1호기 직접(PC 안 거침)"
+# 방식(vehicle_control_client.py, 이제 미사용)에서 "PC 대시보드의 정지 버튼과 동일한
+# 경로"로 되돌림. PC가 꺼지면 정지 자체가 안 되는 리스크를 감수하기로 결정
+# (../../../mediapipe/design/README.md §3-1-1 참고, 이 변경의 배경·트레이드오프 기록).
 
 from __future__ import annotations
 
@@ -33,6 +33,11 @@ def _request(url: str, *, method: str, body: dict | None, timeout_s: float) -> d
 def get_status(dashboard_url: str, *, timeout_s: float = 2.0) -> dict:
     """현재 state(RUNNING/STOPPED/EMERGENCY)와 target_speed_mps 조회."""
     return _request(f"{dashboard_url}/api/control/status", method="GET", body=None, timeout_s=timeout_s)
+
+
+def stop(dashboard_url: str, *, timeout_s: float = 2.0) -> dict:
+    """정지 — 대시보드의 "■ 정지" 버튼과 완전히 동일한 API 호출 (표지판·주먹 공용)."""
+    return _request(f"{dashboard_url}/api/control/stop", method="POST", body=None, timeout_s=timeout_s)
 
 
 def set_speed(dashboard_url: str, target_speed_mps: float, *, timeout_s: float = 2.0) -> dict:

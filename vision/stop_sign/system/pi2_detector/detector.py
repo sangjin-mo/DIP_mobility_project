@@ -1,8 +1,8 @@
 # 라즈베리파이 2호기 — 정지 표지판 인식 + 제스처 인식 통합 메인 루프
 # 흐름: 측면 카메라(공유) -> YOLO 추론(표지판)/MediaPipe 추론(손동작) -> 디바운스(N/M)
-#       -> GestureController(정지 사유 관리, 1호기 직접 STOP/START, PC 경유 가속/감속)
-# 시퀀스 다이어그램: design/seq_detect_stop.svg (표지판 경로는 그대로 유효,
-# GPIO 출력만 vehicle_control_client의 HTTP 호출로 대체됨 — mediapipe/design/README.md §3-1 참고)
+#       -> GestureController(정지 사유 관리, 정지/재출발/가속/감속/하트비트 전부 PC 경유)
+# 시퀀스 다이어그램: design/seq_detect_stop.svg (GPIO 출력이던 부분은 이제 PC
+# web_dashboard의 "■ 정지" 버튼과 동일한 HTTP 호출로 대체됨 — mediapipe/design/README.md §3-1-1 참고)
 #
 # 카메라를 features/mediapipe(제스처 인식)와 공유하기로 해서, 제스처 인식 로직을
 # 별도 프로세스로 두지 않고 이 루프 안에서 같은 프레임에 대해 함께 실행한다.
@@ -18,7 +18,6 @@ import uvicorn
 from ultralytics import YOLO
 
 import config
-import vehicle_control_client
 import dashboard_client
 from state_api import app, vehicle_state
 
@@ -28,6 +27,25 @@ _GESTURE_DIR = Path(__file__).resolve().parents[3] / "mediapipe" / "system" / "p
 sys.path.insert(0, str(_GESTURE_DIR))
 from gesture_controller import GestureController  # noqa: E402
 from gesture_recognizer import GestureRecognizerWrapper  # noqa: E402
+import gesture_config  # noqa: E402
+
+
+def poll_driving_state() -> None:
+    """PC web_dashboard의 상태를 주기적으로 조회해 vehicle_state를 갱신한다.
+
+    STOP/START(vehicle_control_client)와 달리 이건 "지금 추론을 돌려야 하는지"
+    판단용이라 안전 필수 기능이 아님 — 기존 설계 원칙대로 PC 경유(dashboard_client)로
+    충분함. 조회 실패 시엔 안전 쪽으로 driving=False (추론 생략)로 둠.
+    (design/README.md §3-2, mediapipe/design/README.md §3-1-보충 참고)
+    """
+    while True:
+        try:
+            status = dashboard_client.get_status(gesture_config.DASHBOARD_URL)
+            vehicle_state.set_driving(status.get("state") == "RUNNING")
+        except Exception as exc:  # noqa: BLE001
+            vehicle_state.set_driving(False)
+            print(f"[{_ts()}] [detector] 주행 상태 폴링 실패, driving=False로 간주: {exc}")
+        time.sleep(config.DRIVING_STATE_POLL_INTERVAL_S)
 
 
 def _ts() -> str:
@@ -53,8 +71,11 @@ def main() -> None:
     api_thread = threading.Thread(target=run_state_api, daemon=True)
     api_thread.start()
 
+    poll_thread = threading.Thread(target=poll_driving_state, daemon=True)
+    poll_thread.start()
+
     model = YOLO(config.MODEL_PATH)
-    controller = GestureController(vehicle_control_client, dashboard_client)
+    controller = GestureController(dashboard_client)
     gesture_recognizer = GestureRecognizerWrapper()
 
     camera = cv2.VideoCapture(config.SIDE_CAMERA_INDEX)
@@ -72,7 +93,9 @@ def main() -> None:
     start_time = time.monotonic()
 
     print(f"[{_ts()}] [detector] 시작 — camera={config.SIDE_CAMERA_INDEX}, "
-          f"state_api=http://{config.API_HOST}:{config.API_PORT}/vehicle-state")
+          f"driving 상태는 {gesture_config.DASHBOARD_URL}/api/control/status 폴링으로 판단 "
+          f"({config.DRIVING_STATE_POLL_INTERVAL_S}s 주기), "
+          f"state_api=http://{config.API_HOST}:{config.API_PORT}/vehicle-state(수동 테스트용, 병행 유지)")
 
     try:
         while True:

@@ -217,11 +217,12 @@ features/stop_sign/
 | 1호기 감지 방식 | ~~인터럽트~~ → **실제로는 폴링(10ms)** | §3 참고 — 2026-08-22 실제 코드 확인 결과 정정. 속도상 문제는 없어 보임 |
 | 통신 방식 | **GPIO 핀 직결**, HIGH=정지진입 | §3 참고 — 지연 최소, 배선 단순. LOW는 1호기가 안 읽음(§3 정정 내용 참고) |
 | 재정지 방지 | **2호기 detector.py에 고정 시간 쿨다운(lockout)** — HIGH 전송 후 일정 시간 동안 재신호 억제 | §3-1 참고 — 표지판이 계속 보이는 동안 반복적으로 정지 신호를 재전송하지 않기 위함(실제 재출발이 사람 손으로 이뤄지므로, 애초에 우려했던 "자동재출발 직후 재정지"는 아니지만 신호 남발 방지 차원에서 유지) |
-| 정차 중 자원 절약 | `POST /vehicle-state`로 주행 상태를 2호기에 푸시, `driving=false`면 YOLO 추론 생략 | §3-2 참고 — **호출 주체 미확정** (아래 미정 항목). 1호기의 GPIO27 상태 출력으로 대체할지 재검토 필요 |
+| 정차 중 자원 절약 | ~~PC가 `POST /vehicle-state`로 푸시~~ → **2026-08-22 변경: PC `web_dashboard`의 `GET /api/control/status`를 2호기가 직접 폴링**(1초 주기), `state != "RUNNING"`이면 YOLO/제스처 추론 생략 | 호출 주체가 없는 문제 해결(§8 참고). GPIO27 방식은 채택 안 함 — 점퍼케이블 자체가 불가능해져 GPIO 경로 전체가 폐기됨(`features/mediapipe/design/README.md` §3-1) |
 | 2호기 담당 코드 | 이 리포지토리의 `pi2_detector` 사용, `drive_ver3`의 `vision_stop_detector.py`는 미사용 | §7-2 참고 — 중복 구현 확인 후 결정 |
 
 ### 아직 안 정한 것
-- [ ] **`POST /vehicle-state`를 실제로 호출해줄 주체가 없음** — "PC 제어 서버"는 실재하지 않고 제어 API는 1호기 자체에 있음이 확인됨(§3-2). 이대로면 2호기가 영원히 대기 상태. **1호기의 GPIO27 상태 출력(`DriveStatusGpioPart`, 0=이동/1=정지)을 2호기가 직접 읽는 방식으로 전환할지 결정 필요** — 결정되면 `pi2_detector`에 GPIO 입력 읽기 코드 추가해야 함
+- [x] **해결 (2026-08-22)**: `POST /vehicle-state`를 호출해줄 주체가 없던 문제 — `detector.py`에 `poll_driving_state()` 스레드 추가, `dashboard_client.get_status()`로 PC `web_dashboard`의 `GET /api/control/status`를 1초 주기 폴링해 `vehicle_state`를 직접 갱신. GPIO27 방식은 GPIO 자체가 폐기(점퍼케이블 불가, `mediapipe/design/README.md` §3-1)되어 미채택. 기존 push용 `/vehicle-state` 엔드포인트는 수동 테스트 편의로 유지
+- [ ] **이 문서(§3, §3-1, §3-2)는 GPIO 폐기 이전 내용이 다수 남아있어 전체 정리 필요** — 정지 신호가 GPIO가 아니라 `dashboard_client.stop()`을 통한 PC `web_dashboard` 경유 HTTP STOP(대시보드 "■ 정지" 버튼과 동일 경로)으로 바뀌었음(`features/mediapipe/design/README.md` §3-1-1이 최신 근거, 2026-08-22 최종 확정). 1호기 직접 연결(`vehicle_control_client.py`)은 중간에 한 번 시도했다가 폐기됨. 이 README의 GPIO 서술은 아직 업데이트 전이라 최신 코드(`pi2_detector/detector.py`, `dashboard_client.py`)와 불일치함
 - [ ] 1호기 쪽 `DASHBOARD_CONTROL_ENABLED`, `VISION_GPIO_STOP_ENABLED`, `VISION_GPIO_STATUS_ENABLED`가 실제로 켜져 있는지 라인트레이싱 담당 팀원에게 확인 (기본값은 전부 `False`)
 - [ ] 디바운스 값 N, M (연속 프레임 수) — 실제 카메라·모델로 측정 후 튜닝
 - [ ] 쿨다운 시간 값 — "정지→재출발→표지판을 완전히 벗어남"까지 걸리는 실측 시간보다 넉넉하게 설정 필요

@@ -20,11 +20,17 @@ DEBOUNCE_M = 5  # TODO: 연속 미탐지 몇 프레임이면 LOW로 확정할지
 COOLDOWN_SECONDS = 5.0  # TODO: 실측 후 조정
 
 # GPIO 핀 직결은 점퍼케이블 연결이 물리적으로 불가능해져 폐기 — 정지 신호는
-# vehicle_control_client.py를 통해 1호기에 HTTP로 직접 전송함
-# (../../../mediapipe/design/README.md §3-1 참고. URL/토큰 설정은 그쪽 gesture_config.py에 있음)
+# dashboard_client.stop()을 통해 PC web_dashboard의 "■ 정지" 버튼과 동일한 경로로 전송함
+# (../../../mediapipe/design/README.md §3-1-1 참고. URL 설정은 그쪽 gesture_config.py의 DASHBOARD_URL)
 
-# --- 주행 상태 API (§3-2) ---
-# PC 제어 서버가 POST {API_HOST}:{API_PORT}/vehicle-state 로 주행 상태를 푸시
+# --- 주행 상태 판단 (§3-2) ---
+# 2026-08-22: push를 기다리는 대신, PC web_dashboard의 GET /api/control/status를
+# 직접 폴링하는 방식으로 전환 (아무도 /vehicle-state를 호출해주지 않는 문제 해결).
+# URL은 features/mediapipe/system/pi2_gesture/gesture_config.py의 DASHBOARD_URL 재사용.
+DRIVING_STATE_POLL_INTERVAL_S = 1.0  # TODO: 반응성 vs 트래픽 고려해 실측 후 조정
+
+# 아래 push용 엔드포인트는 폴링과 별개로 수동 테스트 편의를 위해 유지 (testguide 참고).
+# PC 제어 서버가 POST {API_HOST}:{API_PORT}/vehicle-state 로 주행 상태를 푸시할 수도 있음
 API_HOST = "0.0.0.0"
 API_PORT = 8010
 # TODO: 허용 IP를 PC 고정 IP로 제한할지 여부 — image_transfer의 TRIGGER_ALLOWED_HOST와 동일한 논의 필요 (§8)

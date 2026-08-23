@@ -9,8 +9,8 @@
 # 2) 나머지 설치
 #    python3 -m pip install -r requirements.txt --break-system-packages
 
-# GPIO(gpiozero)는 점퍼케이블 연결 불가로 제거 — 정지 신호는 HTTP로 직접 전송
-# (vehicle_control_client.py, ../../../mediapipe/design/README.md §3-1 참고)
+# GPIO(gpiozero)는 점퍼케이블 연결 불가로 제거 — 정지 신호는 PC web_dashboard의
+# "■ 정지" 버튼과 동일한 HTTP 경로로 전송 (dashboard_client.py, ../../../mediapipe/design/README.md §3-1-1 참고)
 #
 # ⚠️ detector.py는 이제 features/mediapipe/system/pi2_gesture/의 모듈도 가져다 씀
 # (같은 카메라를 공유해서 표지판 인식과 제스처 인식을 한 프로세스에서 같이 돌림).

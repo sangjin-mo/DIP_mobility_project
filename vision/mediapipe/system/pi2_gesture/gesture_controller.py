@@ -28,13 +28,14 @@ def _clamp_speed(speed_mps: float) -> float:
 class GestureController:
     """detector.py의 카메라 루프에서 매 프레임 on_frame()으로 호출되는 상태 머신.
 
-    vehicle_control_client(1호기 직접, 정지/재출발)와 dashboard_client(PC 경유,
-    가속/감속/하트비트)는 호출부(detector.py)에서 주입받는다 — 이 모듈은 통신
-    방식을 모르고 두 클라이언트 모듈의 함수만 호출한다 (테스트 시 모킹 용이).
+    정지·재출발·가속·감속·하트비트 전부 dashboard_client(PC web_dashboard 경유)로
+    통일한다 — 호출부(detector.py)에서 주입받는다. 2026-08-22 이전엔 정지/재출발만
+    vehicle_control_client(1호기 직접, PC 안 거침)로 분리했었으나, PC 경유 방식으로
+    되돌리기로 결정해 단일 클라이언트로 통합함 (design/README.md §3-1-1).
+    이 모듈은 통신 방식을 모르고 클라이언트 모듈의 함수만 호출한다 (테스트 시 모킹 용이).
     """
 
-    def __init__(self, vehicle_client, dashboard_client) -> None:
-        self._vehicle_client = vehicle_client
+    def __init__(self, dashboard_client) -> None:
         self._dashboard_client = dashboard_client
 
         self._fist_streak = 0
@@ -99,7 +100,7 @@ class GestureController:
         # 재출발 시 복원할 속도를 정지 "직전"에 저장 (README §3-1-2)
         self._speed_before_stop = self._known_speed_mps
         try:
-            self._vehicle_client.send_stop(cfg.DRIVE_PI_CONTROL_URL, cfg.DRIVE_PI_CONTROL_TOKEN)
+            self._dashboard_client.stop(cfg.DASHBOARD_URL)
             print(f"[control] STOP 전송 완료 (사유={self._stop_reasons})")
         except Exception as exc:  # noqa: BLE001
             print(f"[control] STOP 전송 실패: {exc}")
@@ -107,9 +108,7 @@ class GestureController:
     def _send_resume(self) -> None:
         resume_speed = self._speed_before_stop or cfg.MIN_SPEED_MPS
         try:
-            result = self._vehicle_client.send_start(
-                cfg.DRIVE_PI_CONTROL_URL, cfg.DRIVE_PI_CONTROL_TOKEN, resume_speed
-            )
+            result = self._dashboard_client.set_speed(cfg.DASHBOARD_URL, resume_speed)
             print(f"[control] START 전송 완료 (속도 {resume_speed} m/s 복원)")
         except Exception as exc:  # noqa: BLE001
             print(f"[control] START(재출발) 전송 실패: {exc}")

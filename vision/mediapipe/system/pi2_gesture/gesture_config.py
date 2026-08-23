@@ -20,12 +20,9 @@ SPEED_COOLDOWN_S = 2.0  # 한 번 명령을 보낸 뒤 같은/반대 제스처�
 MIN_SPEED_MPS = 0.05
 MAX_SPEED_MPS = 0.50  # web_dashboard/config.py의 MAX_TARGET_SPEED_MPS와 반드시 일치시킬 것 (design/README.md §3-2-3 문제 6)
 
-# --- 1호기 직접 연결 (정지/재출발 — PC 안 거침, design/README.md §3-1-1) ---
-# TODO: 실제 1호기 IP로 교체
-DRIVE_PI_CONTROL_URL = "http://192.168.0.51:9000/api/control"
-DRIVE_PI_CONTROL_TOKEN = ""  # TODO: 1호기 dashboard_control.py의 ROVER_CONTROL_TOKEN과 동일한 값으로 맞출 것
-
-# --- PC web_dashboard 경유 (가속/감속·하트비트 — design/README.md §3-2) ---
+# --- PC web_dashboard 경유 (정지/재출발/가속/감속·하트비트 — design/README.md §3-1-1, §3-2) ---
+# 2026-08-22: 정지/재출발도 1호기 직접 연결에서 PC 경유로 통합함(§3-1-1 참고).
+# 예전 DRIVE_PI_CONTROL_URL/TOKEN(1호기 직접용)은 더 이상 쓰지 않아 제거함.
 # TODO: 실제 PC IP로 교체
 DASHBOARD_URL = "http://192.168.0.10:8080"
 HEARTBEAT_INTERVAL_S = 0.5  # 워치독(1.5초)보다 충분히 짧게 (design/README.md §3-1-4 문제 4)
