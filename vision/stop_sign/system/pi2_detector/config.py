@@ -23,6 +23,14 @@ COOLDOWN_SECONDS = 5.0  # TODO: 실측 후 조정
 # dashboard_client.stop()을 통해 PC web_dashboard의 "■ 정지" 버튼과 동일한 경로로 전송함
 # (../../../mediapipe/design/README.md §3-1-1 참고. URL 설정은 그쪽 gesture_config.py의 DASHBOARD_URL)
 
+# --- 제스처(손동작) 인식 on/off (mediapipe/design/README.md §4-5 참고) ---
+# 이 Pi(Cortex-A72, AES 명령어 미지원)에서는 공식 mediapipe 패키지가
+# GestureRecognizer.create_from_options() 호출 시 SIGILL로 크래시함(자체 우회
+# 파이프라인은 아직 프로토타입 단계). 그동안은 False로 두고 표지판 인식만 배포.
+# GestureController(정지 사유 관리)는 이 플래그와 무관하게 항상 사용함 — 표지판
+# 정지 요청도 그 클래스를 거치기 때문(§4-2).
+GESTURE_RECOGNITION_ENABLED = False
+
 # --- 주행 상태 판단 (§3-2) ---
 # 2026-08-22: push를 기다리는 대신, PC web_dashboard의 GET /api/control/status를
 # 직접 폴링하는 방식으로 전환 (아무도 /vehicle-state를 호출해주지 않는 문제 해결).

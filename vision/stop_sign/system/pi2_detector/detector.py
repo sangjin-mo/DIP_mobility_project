@@ -26,8 +26,13 @@ from state_api import app, vehicle_state
 _GESTURE_DIR = Path(__file__).resolve().parents[3] / "mediapipe" / "system" / "pi2_gesture"
 sys.path.insert(0, str(_GESTURE_DIR))
 from gesture_controller import GestureController  # noqa: E402
-from gesture_recognizer import GestureRecognizerWrapper  # noqa: E402
 import gesture_config  # noqa: E402
+
+# gesture_recognizer.py는 실제 mediapipe 패키지를 import함 — 이 Pi에서는 SIGILL로
+# 크래시하는 경우가 있어(config.GESTURE_RECOGNITION_ENABLED 참고) 꺼져 있을 때는
+# import 자체를 안 해서, mediapipe 미설치 환경에서도 표지판 인식만은 돌아가게 함.
+if config.GESTURE_RECOGNITION_ENABLED:
+    from gesture_recognizer import GestureRecognizerWrapper  # noqa: E402
 
 
 def poll_driving_state() -> None:
@@ -76,7 +81,7 @@ def main() -> None:
 
     model = YOLO(config.MODEL_PATH)
     controller = GestureController(dashboard_client)
-    gesture_recognizer = GestureRecognizerWrapper()
+    gesture_recognizer = GestureRecognizerWrapper() if config.GESTURE_RECOGNITION_ENABLED else None
 
     camera = cv2.VideoCapture(config.SIDE_CAMERA_INDEX)
     if not camera.isOpened():
@@ -140,13 +145,15 @@ def main() -> None:
                     miss_streak = 0
                     print(f"[{_ts()}] [detector] 표지판 해제 — STOP 요청 철회")
 
-            # --- 제스처 인식 (같은 프레임 재사용) ---
-            timestamp_ms = int((time.monotonic() - start_time) * 1000)
-            gesture = gesture_recognizer.recognize(frame, timestamp_ms)
-            controller.on_frame(gesture)
+            # --- 제스처 인식 (같은 프레임 재사용, GESTURE_RECOGNITION_ENABLED일 때만) ---
+            if gesture_recognizer is not None:
+                timestamp_ms = int((time.monotonic() - start_time) * 1000)
+                gesture = gesture_recognizer.recognize(frame, timestamp_ms)
+                controller.on_frame(gesture)
     finally:
         controller.stop_heartbeat()
-        gesture_recognizer.close()
+        if gesture_recognizer is not None:
+            gesture_recognizer.close()
         camera.release()
 
 
