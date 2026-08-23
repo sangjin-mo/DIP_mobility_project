@@ -2,8 +2,12 @@
 # 값 대부분은 실측 전 TODO — design/README.md §8 "아직 안 정한 것" 참고
 
 # --- 카메라 ---
-SIDE_CAMERA_INDEX = 1  # TODO: 실제 측면 카메라의 /dev/videoN 인덱스로 교체 (작물 카메라와 다른 장치)
-# 2026-08-22: 작물 카메라(index 0)를 임시로 빌려 2호기 실기에서 GPIO 하드웨어 검증 완료 (design/README.md §7 참고)
+# 2026-08-23: 실측 결과 이 Pi의 웹캠(C920)은 물리 카메라가 1개뿐이고, index 1은
+# 캡처용이 아닌 메타데이터 전용 노드(v4l2 Device Caps에 "Video Capture" 없음,
+# cv2.VideoCapture(1)도 항상 opened=False)로 확인됨. 별도 측면 카메라가 실제로
+# 장착되기 전까지는 작물 카메라(index 0)를 다시 공유해서 사용함 — capture.py와
+# 동시 실행 시 카메라를 서로 점유하려 충돌하니 둘 중 하나만 그 카메라를 잡을 것.
+SIDE_CAMERA_INDEX = 0  # TODO: 실제 측면 카메라가 장착되면 그 /dev/videoN 인덱스로 교체
 
 # --- 인식 모델 ---
 MODEL_PATH = "yolov8n.pt"  # 사전학습 COCO 가중치, 파인튜닝 없이 사용 (design/README.md §7 검증 결과)
