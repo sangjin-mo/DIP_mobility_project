@@ -1,0 +1,11 @@
+# 모델 파일(gesture_recognizer.task)은 저장소에 커밋하지 않음 — 아래에서 받을 것:
+# https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer#models
+# 다운로드한 .task 파일을 이 폴더의 models/gesture_recognizer.task 경로에 둘 것
+# (gesture_config.py의 GESTURE_MODEL_PATH 참고)
+#
+# 라즈베리파이(aarch64)에서 mediapipe 설치 시 라즈베리파이 CPU 아키텍처용 wheel이
+# 제공되는지 사전 확인 필요 — stop_sign에서 torch/ultralytics 설치 때 겪었던 것과
+# 유사한 설치 이슈가 있을 수 있음 (features/stop_sign/design/README.md §7-1 참고)
+
+mediapipe
+opencv-python
