@@ -57,9 +57,11 @@ running instance**, not their own local copy.
 
 - **Only one designated Mac/PC runs the backend processes** — `web_dashboard`
   itself, plus `ai_report`'s ingest listener (which is what actually writes
-  `sessions.db`) and the vision team's `pc_server`. `scripts/start_central_server.sh`
-  starts all three together, opens the macOS firewall for the duration, and
-  closes it again on exit.
+  `sessions.db`) and the vision team's `pc_server`.
+  `scripts/start_central_server.sh` (macOS) or
+  `scripts\start_central_server.ps1` (Windows, run "as Administrator" for
+  the firewall step) starts all three together, opens the firewall for the
+  duration, and closes it again on exit.
 - **Everyone else only opens a browser.** Do not run `python -m web_dashboard`
   on your own laptop "just to look" — your local `sessions.db`/`reports/`
   will be empty, so the dashboard will look reachable but show none of the

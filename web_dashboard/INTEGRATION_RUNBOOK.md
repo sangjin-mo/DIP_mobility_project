@@ -162,13 +162,22 @@ Invoke-RestMethod http://DONKEY_PI_IP:9200/api/status
 ```
 
 **한 대의 PC만 대시보드 담당 PC가 된다.** 그 PC에서 `ai_report` 수집
-리스너, 비전 `pc_server`, `web_dashboard`를 함께 실행한다. macOS에서는
-아래 스크립트 하나로 세 가지를 모두 실행하고, 종료 시(Ctrl+C) 방화벽도
-자동으로 다시 잠근다.
+리스너, 비전 `pc_server`, `web_dashboard`를 함께 실행한다. 아래 스크립트
+하나로 세 가지를 모두 실행하고, 종료 시(Ctrl+C) 방화벽도 자동으로 다시
+잠근다. macOS와 Windows 모두 지원한다.
+
+macOS:
 
 ```bash
 cd /path/to/FarmRover
 ./scripts/start_central_server.sh
+```
+
+Windows (방화벽 자동 설정을 원하면 PowerShell을 "관리자 권한으로 실행"):
+
+```powershell
+cd C:\path\to\FarmRover
+.\scripts\start_central_server.ps1
 ```
 
 다른 팀원은 각자 `python -m web_dashboard`를 실행하지 않는다 — 각자의
@@ -177,17 +186,23 @@ cd /path/to/FarmRover
 배지가 대시보드 담당 PC의 호스트 이름과 공유 데이터 연결 여부를 보여주므로,
 잘못된(로컬) 인스턴스에 접속했는지 바로 확인할 수 있다.
 
-다른 기기에서는 대시보드 담당 PC의 macOS 로컬 호스트 이름으로 접속한다
-(`scutil --get LocalHostName`으로 확인). 세션마다 바뀌는 DHCP IP 대신
-안정적인 주소다.
+다른 기기에서는 대시보드 담당 PC의 로컬 호스트 이름으로 접속한다. 세션마다
+바뀌는 DHCP IP 대신 안정적인 주소다.
 
 ```text
 http://<대시보드 PC 로컬 호스트 이름>.local:8080
 ```
 
-`scripts/start_central_server.sh`가 실행 중에는 macOS 방화벽을 열어 두므로
-Windows 방화벽 수동 설정과 달리 별도 조치가 필요 없다. 스크립트를
-종료하면(Ctrl+C) 방화벽도 다시 닫힌다.
+- macOS 호스트 이름 확인: `scutil --get LocalHostName`
+- Windows 호스트 이름 확인: `$env:COMPUTERNAME` (PowerShell). Windows에는
+  macOS의 Bonjour 같은 mDNS가 기본 내장되어 있지 않으므로, `.local` 주소가
+  안 열리면 Bonjour(예: iTunes/Bonjour Print Services)를 설치하거나 대신
+  `http://<Windows PC 이름>:8080`(Windows 네트워크의 기본 이름 확인 방식,
+  추가 설치 불필요)으로 접속한다.
+
+두 스크립트 모두 실행 중에는 방화벽을 열어 두므로(Windows는 관리자 권한
+필요) 별도 수동 방화벽 설정이 필요 없다. 스크립트를 종료하면(Ctrl+C)
+방화벽도 다시 닫힌다.
 
 ## 6. LLM 레포트
 

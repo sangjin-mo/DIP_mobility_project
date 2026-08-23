@@ -2,6 +2,7 @@
 # Starts this Mac as the FarmRover central server: ai_report ingest,
 # the vision team's pc_server, and web_dashboard together. Opens the
 # macOS Application Firewall for the duration and closes it again on exit.
+# Windows: use start_central_server.ps1 instead (same behavior, PowerShell).
 #
 # Usage: ./scripts/start_central_server.sh
 set -euo pipefail
