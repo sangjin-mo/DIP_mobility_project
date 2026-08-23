@@ -32,7 +32,7 @@ from ai_report.models import (
     ZoneEnv,
     ZoneMetadata,
 )
-from ai_report.pipeline.segment import PatrolSegmentation, ZoneWindow
+from ai_report.pipeline.segment import PatrolSegmentation, ZoneWindow, dominant_crop_class
 
 # Zone status rule (spec §6). Order matters: 이상 is checked first, then 주의,
 # so a zone meeting both the 이상 and 주의 conditions is reported as 이상 —
@@ -90,6 +90,43 @@ def aggregate(
         ),
         zones=zones,
     )
+
+
+def apply_crop_type_zone_names(
+    agg: PatrolAggregate, segmentation: PatrolSegmentation, settings: Settings
+) -> PatrolAggregate:
+    """Rewrite each zone's `zone_name` to its crop type (ADR-0009), after an
+    `aggregate()` call over a `segment_by_crop_type`-produced `segmentation`.
+
+    `aggregate()` itself needs no change at all for crop-type zones --
+    `_aggregate_zone` only reads a `ZoneWindow`'s `telemetry`/`analysis`/
+    `events`/`zone_id`, all of which `segment_by_crop_type` already fills in
+    correctly. The one thing `_aggregate_zone` gets wrong for this path is
+    `zone_name` (`settings.ZONE_NAMES.get(window.zone_id, ...)`, a lookup
+    keyed by a physical zone_id that no longer means a location here) --
+    this function is a small second pass fixing exactly that, rather than a
+    parallel reimplementation of `aggregate()`.
+
+    Every image inside one crop-type `ZoneWindow` shares the same
+    `dominant_crop_class` result by construction (that is how
+    `segment_by_crop_type` grouped them), so re-deriving it from the
+    window's first analysis result is exact. A zone whose window is somehow
+    empty (shouldn't happen -- `segment_by_crop_type` never creates an empty
+    group) keeps its original `zone_name` rather than raising. Called by
+    `orchestration.py::run_patrol_pipeline`; directly by
+    `tests/test_aggregate.py`.
+    """
+    windows_by_zone = {w.zone_id: w for w in segmentation.zones()}
+    new_zones = []
+    for zone in agg.zones:
+        window = windows_by_zone.get(zone.zone_id)
+        crop_class = dominant_crop_class(window.analysis[0]) if window and window.analysis else None
+        if crop_class is None:
+            new_zones.append(zone)
+            continue
+        display_name = settings.CROP_DISPLAY_NAMES.get(crop_class, crop_class)
+        new_zones.append(zone.model_copy(update={"zone_name": f"{display_name}구역"}))
+    return agg.model_copy(update={"zones": new_zones})
 
 
 def _patrol_date(patrol_id: str) -> str:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from ai_report.config import get_settings
 from ai_report.models import (
+    AnalysisResult,
+    Detection,
     DriveReading,
     DriveState,
     EnvReading,
@@ -9,9 +11,29 @@ from ai_report.models import (
     EventType,
     TelemetryPacket,
 )
-from ai_report.pipeline.segment import _boundaries_from_distance, segment_patrol
+from ai_report.pipeline.segment import (
+    _boundaries_from_distance,
+    dominant_crop_class,
+    segment_by_crop_type,
+    segment_patrol,
+)
 
 PATROL_ID = "20260813_1430"
+
+
+def detection(class_: str, count: int, confidence: float | None = 0.9) -> Detection:
+    return Detection.model_validate({"class": class_, "state": "정상", "count": count, "confidence": confidence})
+
+
+def analysis(image_id: str, ts_ms: int, detections: list[Detection]) -> AnalysisResult:
+    return AnalysisResult(
+        image_id=image_id,
+        patrol_id=PATROL_ID,
+        captured_at_ms=ts_ms,
+        image_path=f"images/{PATROL_ID}/{image_id}.jpg",
+        image_quality=0.8,
+        detections=detections,
+    )
 
 
 def telemetry(seq: int, ts_ms: int, state: DriveState = DriveState.RUNNING, speed: float = 0.3) -> TelemetryPacket:
@@ -168,3 +190,68 @@ def test_empty_input_produces_no_windows():
     seg = segment_patrol(PATROL_ID, [], [], [], get_settings())
     assert seg.windows == []
     assert seg.zones() == []
+
+
+# --- ADR-0009: segment_by_crop_type ----------------------------------------
+
+
+def test_dominant_crop_class_picks_highest_count():
+    result = analysis("z1", 0, [detection("tomato", 2), detection("chili_pepper", 5)])
+    assert dominant_crop_class(result) == "chili_pepper"
+
+
+def test_dominant_crop_class_breaks_ties_alphabetically():
+    result = analysis("z1", 0, [detection("tomato", 3), detection("chili_pepper", 3)])
+    assert dominant_crop_class(result) == "chili_pepper"  # "chili_pepper" < "tomato"
+
+
+def test_dominant_crop_class_none_when_no_detections():
+    assert dominant_crop_class(analysis("z1", 0, [])) is None
+
+
+def test_segment_by_crop_type_groups_images_by_dominant_class():
+    events = [event(0, 0, EventType.PATROL_START), event(1, 5000, EventType.PATROL_END)]
+    images = [
+        analysis("a", 1000, [detection("tomato", 4)]),
+        analysis("b", 2000, [detection("tomato", 2)]),
+        analysis("c", 3000, [detection("chili_pepper", 1)]),
+    ]
+
+    seg = segment_by_crop_type(PATROL_ID, events, images)
+
+    assert seg.boundary_confidence == "low"
+    assert seg.patrol_start_ts_ms == 0
+    assert seg.patrol_end_ts_ms == 5000
+    zones = seg.zones()
+    assert [z.zone_id for z in zones] == [1, 2]  # alphabetical: chili_pepper, tomato
+    by_zone = {z.zone_id: {a.image_id for a in z.analysis} for z in zones}
+    assert by_zone[1] == {"c"}  # chili_pepper
+    assert by_zone[2] == {"a", "b"}  # tomato
+
+
+def test_segment_by_crop_type_puts_no_detection_images_in_zone_zero():
+    images = [analysis("empty", 1000, [])]
+
+    seg = segment_by_crop_type(PATROL_ID, [], images)
+
+    assert seg.zones() == []  # zone_id=0 excluded from zone reporting
+    assert len(seg.windows) == 1
+    assert seg.windows[0].zone_id == 0
+    assert {a.image_id for a in seg.windows[0].analysis} == {"empty"}
+
+
+def test_segment_by_crop_type_falls_back_to_image_timestamps_without_events():
+    images = [analysis("a", 1000, [detection("tomato", 1)]), analysis("b", 4000, [detection("tomato", 1)])]
+
+    seg = segment_by_crop_type(PATROL_ID, [], images)
+
+    assert seg.patrol_start_ts_ms == 1000
+    assert seg.patrol_end_ts_ms == 4000
+
+
+def test_segment_by_crop_type_empty_input_produces_no_windows():
+    seg = segment_by_crop_type(PATROL_ID, [], [])
+    assert seg.windows == []
+    assert seg.zones() == []
+    assert seg.patrol_start_ts_ms == 0
+    assert seg.patrol_end_ts_ms == 0

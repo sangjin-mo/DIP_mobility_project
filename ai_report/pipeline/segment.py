@@ -291,6 +291,112 @@ def _build_windows(
     return windows
 
 
+def dominant_crop_class(result: AnalysisResult) -> str | None:
+    """The crop class with the most total detections in `result`, or `None`
+    if it has no detections at all. Ties break alphabetically (descending
+    count, then ascending class name) so the choice is deterministic
+    regardless of dict/insertion order.
+
+    Not module-private: `segment_by_crop_type` uses it to build each
+    `ZoneWindow`'s group, and `pipeline/aggregate.py::aggregate_zones_by_crop_type`
+    uses it again afterward to recover which crop class a given zone_id
+    represents (every image in one crop-type `ZoneWindow` shares the same
+    dominant class by construction, so re-deriving it from the window's
+    first analysis result is exact, not a guess).
+    """
+    if not result.detections:
+        return None
+    totals: dict[str, int] = {}
+    for d in result.detections:
+        totals[d.class_] = totals.get(d.class_, 0) + d.count
+    return min(totals, key=lambda c: (-totals[c], c))
+
+
+def segment_by_crop_type(
+    patrol_id: str,
+    events: list[EventMessage],
+    analysis: list[AnalysisResult],
+) -> PatrolSegmentation:
+    """Group classified images into pseudo-zones by crop type (ADR-0009).
+
+    Used instead of `segment_patrol` when there is no reliable physical
+    zone signal to segment by at all -- `drive_ver2` never sends
+    `ZONE_ENTER` events or any telemetry (see ADR-0009's Context), so
+    `segment_patrol`'s existing distance fallback always degrades to zero
+    zones once telemetry is entirely absent
+    (`_boundaries_from_distance`'s `if not telemetry_sorted: return []`).
+    Grouping by each image's already-classified dominant crop type
+    (`_dominant_class`) is more useful than reporting nothing.
+
+    One `ZoneWindow` per distinct crop class present across `analysis`,
+    `zone_id` assigned 1, 2, 3... in alphabetical class order (deterministic
+    regardless of image arrival order -- GUIDELINES.md hard rule 2). Images
+    with no detections at all go into the same `zone_id=0` transit window
+    `_build_windows` already uses for rows before the first `ZONE_ENTER` on
+    the event-based path -- excluded from zone reporting but still counted
+    toward `images_analysed`, no new convention needed.
+
+    `patrol_start_ts_ms`/`patrol_end_ts_ms` come from `PATROL_START`/
+    `PATROL_END` events when present (now real, since `web_dashboard`
+    emits them around the START/STOP buttons -- see
+    `web_dashboard/services/patrol_event_service.py`), falling back to the
+    classified images' own `captured_at_ms` range otherwise, mirroring
+    `segment_patrol`'s own event-then-row-timestamp fallback structure
+    exactly (reuses the same `_first_ts`/`_last_ts` helpers).
+
+    `boundary_confidence` is always `"low"` -- there is no physical
+    boundary here at all, and downstream fields
+    (`ZoneMetadata.confidence`, `DataCompleteness.zone_boundary_confidence`)
+    already treat `"low"` as exactly that meaning.
+
+    Pure and deterministic like `segment_patrol` -- no I/O, no `Settings`
+    dependency (no config threshold this path needs). Called by
+    `orchestration.py::run_patrol_pipeline`; directly by
+    `tests/test_segment.py`.
+    """
+    events_sorted = sorted(events, key=lambda e: e.ts_ms)
+    analysis_sorted = sorted(analysis, key=lambda a: a.captured_at_ms)
+
+    patrol_start_ts_ms = _first_ts(events_sorted, EventType.PATROL_START)
+    patrol_end_ts_ms = _last_ts(events_sorted, EventType.PATROL_END)
+    if patrol_start_ts_ms is None:
+        patrol_start_ts_ms = analysis_sorted[0].captured_at_ms if analysis_sorted else 0
+    if patrol_end_ts_ms is None:
+        patrol_end_ts_ms = analysis_sorted[-1].captured_at_ms if analysis_sorted else patrol_start_ts_ms
+
+    groups: dict[str, list[AnalysisResult]] = {}
+    untagged: list[AnalysisResult] = []
+    for result in analysis_sorted:
+        crop_class = dominant_crop_class(result)
+        if crop_class is None:
+            untagged.append(result)
+        else:
+            groups.setdefault(crop_class, []).append(result)
+
+    windows: list[ZoneWindow] = []
+    if untagged:
+        windows.append(
+            ZoneWindow(zone_id=0, start_ts_ms=patrol_start_ts_ms, end_ts_ms=patrol_end_ts_ms, analysis=untagged)
+        )
+    for zone_id, crop_class in enumerate(sorted(groups), start=1):
+        windows.append(
+            ZoneWindow(
+                zone_id=zone_id,
+                start_ts_ms=patrol_start_ts_ms,
+                end_ts_ms=patrol_end_ts_ms,
+                analysis=groups[crop_class],
+            )
+        )
+
+    return PatrolSegmentation(
+        patrol_id=patrol_id,
+        boundary_confidence="low",
+        windows=windows,
+        patrol_start_ts_ms=patrol_start_ts_ms,
+        patrol_end_ts_ms=patrol_end_ts_ms,
+    )
+
+
 def _fill_window(
     zone_id: int,
     start_ts_ms: int,

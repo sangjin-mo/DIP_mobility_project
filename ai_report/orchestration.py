@@ -1,9 +1,12 @@
 """A2 orchestration — the piece `ai_report/CALL_MAP.md` documented as "not
 wired up yet": reacting to `PATROL_END` by running the full ①–⑤ chain
-(`pipeline.segment.segment_patrol` -> `pipeline.aggregate.aggregate` ->
+(`pipeline.segment.segment_by_crop_type` -> `pipeline.aggregate.aggregate` ->
 `pipeline.select_images.apply_image_selection` -> `pipeline.payload.build_payload`
 -> `llm.client.generate_report` -> `render.markdown.render_report` ->
 `storage.layout.write_report`) for one patrol and writing its report.
+
+Zones are grouped by classified crop type, not by DR's `ZONE_ENTER`
+events/telemetry (ADR-0009) — `drive_ver2` never sends either.
 
 GUIDELINES.md: "No scheduling / cron / APScheduler. WEB triggers patrols.
 We react to PATROL_END." — this module is the reaction, not a poller. The
@@ -31,9 +34,9 @@ from ai_report.config import Settings
 from ai_report.ingest.store import Store
 from ai_report.ingest.vis_watcher import VisWatcher
 from ai_report.llm.client import generate_report
-from ai_report.pipeline.aggregate import aggregate
+from ai_report.pipeline.aggregate import aggregate, apply_crop_type_zone_names
 from ai_report.pipeline.payload import build_payload, write_payload
-from ai_report.pipeline.segment import segment_patrol
+from ai_report.pipeline.segment import segment_by_crop_type
 from ai_report.pipeline.select_images import (
     apply_image_selection,
     copy_and_resize_images,
@@ -62,20 +65,22 @@ async def run_patrol_pipeline(
        `settings.VIS_COMPLETE_TIMEOUT_S`/`VIS_WATCHER_POLL_INTERVAL_S` were
        already declared in `config.py` for exactly this call and were
        unused until now.
-    2. Load this patrol's rows back out of `store` (telemetry, events,
-       analysis — whatever VIS wrote before `_COMPLETE` or the timeout).
-    3. `segment_patrol` -> `aggregate` -> `apply_image_selection` ->
-       `build_payload` -> `generate_report` -> `render_report` ->
-       `write_report`, exactly the chain `cli.py::_regenerate` (A6) already
-       proves works end-to-end, except regenerate reloads already-resized
-       images from a prior report's `images/` directory while this, the
-       *first* build for a patrol, resizes them fresh via
-       `load_selected_images` (in-memory, for the LLM call) and
-       `copy_and_resize_images` (to disk, via `write_report`'s
-       `extra_writers` — see that function's own docstring and the
-       `[!FLAG]` in `storage/layout.py` for why these must go through
-       `extra_writers` rather than being written to the final path
-       directly).
+    2. Load this patrol's rows back out of `store` (events, analysis —
+       whatever VIS wrote before `_COMPLETE` or the timeout; telemetry
+       isn't loaded here at all — `segment_by_crop_type` doesn't use it,
+       see ADR-0009).
+    3. `segment_by_crop_type` -> `aggregate` -> `apply_crop_type_zone_names`
+       -> `apply_image_selection` -> `build_payload` -> `generate_report` ->
+       `render_report` -> `write_report`. Mirrors the chain
+       `cli.py::_regenerate` (A6) already proves works end-to-end, except
+       regenerate reloads already-resized images from a prior report's
+       `images/` directory while this, the *first* build for a patrol,
+       resizes them fresh via `load_selected_images` (in-memory, for the
+       LLM call) and `copy_and_resize_images` (to disk, via
+       `write_report`'s `extra_writers` — see that function's own
+       docstring and the `[!FLAG]` in `storage/layout.py` for why these
+       must go through `extra_writers` rather than being written to the
+       final path directly).
 
     `llm_client` is forwarded to `generate_report` unchanged (`None` in
     production, constructing a real `AsyncOpenAI`; tests inject a mock —
@@ -102,17 +107,20 @@ async def run_patrol_pipeline(
                 patrol_id, settings.VIS_COMPLETE_TIMEOUT_S, scan.new_records,
             )
 
-        telemetry = store.telemetry_for_patrol(patrol_id)
         events = store.events_for_patrol(patrol_id)
         analysis = store.analysis_for_patrol(patrol_id)
 
-        segmentation = segment_patrol(patrol_id, telemetry, events, analysis, settings)
+        # ADR-0009: zones grouped by classified crop type, not by
+        # ZONE_ENTER/distance -- drive_ver2 never sends either, and the
+        # deployed rover has no physical zone concept to segment by at all.
+        segmentation = segment_by_crop_type(patrol_id, events, analysis)
 
         udp_received = len(store.received_telemetry_seqs(patrol_id))
         max_seq = store.max_telemetry_seq(patrol_id)
         udp_expected = (max_seq + 1) if max_seq is not None else 0
 
         agg = aggregate(segmentation, udp_received, udp_expected, settings)
+        agg = apply_crop_type_zone_names(agg, segmentation, settings)
         agg = apply_image_selection(agg, segmentation, settings)
         payload, _tokens = build_payload(agg, segmentation, settings)
 

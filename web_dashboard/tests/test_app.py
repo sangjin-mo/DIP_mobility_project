@@ -271,6 +271,67 @@ def test_control_api_forwards_validated_commands(tmp_path):
     assert send.call_args.args[1:] == (0.3,)
 
 
+def test_start_rover_posts_patrol_start_and_returns_patrol_id(tmp_path):
+    """ADR-0009: the dashboard is what now marks a patrol's start, since
+    drive_ver2 never emits PATROL_START itself.
+    """
+    app = create_app(
+        ai_settings=Settings(DATA_ROOT=tmp_path / "data", REPORT_ROOT=tmp_path / "reports", LLM_ENABLED=False),
+        dashboard_settings=DashboardSettings(
+            ROVER_CONTROL_URL="http://rover.local:9200/api/control",
+            AI_REPORT_EVENT_URL="http://127.0.0.1:9101/api/events",
+        ),
+    )
+    accepted = {"accepted": True, "command": "START", "rover": {"state": "RUNNING"}}
+
+    with (
+        patch("web_dashboard.app.RoverControlService.send", return_value=accepted),
+        patch("web_dashboard.app.PatrolEventService.start_patrol", return_value="20260824_0900") as start_patrol,
+        TestClient(app) as client,
+    ):
+        assert client.get("/api/status").json()["patrol_events_configured"] is True
+        response = client.post("/api/control/start", json={"target_speed_mps": 0.3})
+
+    assert response.status_code == 200
+    assert response.json()["patrol_id"] == "20260824_0900"
+    start_patrol.assert_called_once()
+
+
+def test_stop_rover_posts_patrol_end_and_returns_patrol_id(tmp_path):
+    app = create_app(
+        ai_settings=Settings(DATA_ROOT=tmp_path / "data", REPORT_ROOT=tmp_path / "reports", LLM_ENABLED=False),
+        dashboard_settings=DashboardSettings(
+            ROVER_CONTROL_URL="http://rover.local:9200/api/control",
+            AI_REPORT_EVENT_URL="http://127.0.0.1:9101/api/events",
+        ),
+    )
+    accepted = {"accepted": True, "command": "STOP", "rover": {"state": "STOPPED"}}
+
+    with (
+        patch("web_dashboard.app.RoverControlService.send", return_value=accepted),
+        patch("web_dashboard.app.PatrolEventService.end_patrol", return_value="20260824_0900") as end_patrol,
+        TestClient(app) as client,
+    ):
+        response = client.post("/api/control/stop")
+
+    assert response.status_code == 200
+    assert response.json()["patrol_id"] == "20260824_0900"
+    end_patrol.assert_called_once()
+
+
+def test_patrol_events_report_as_unconfigured_when_url_is_unset(tmp_path):
+    app = create_app(
+        ai_settings=Settings(DATA_ROOT=tmp_path / "data", REPORT_ROOT=tmp_path / "reports", LLM_ENABLED=False),
+        dashboard_settings=DashboardSettings(AI_REPORT_EVENT_URL=None),
+    )
+
+    with TestClient(app) as client:
+        status = client.get("/api/status").json()
+
+    assert status["patrol_events_configured"] is False
+    assert status["active_patrol_id"] is None
+
+
 def test_control_api_uses_default_speed_for_button_only_start(tmp_path):
     app = create_app(
         ai_settings=Settings(

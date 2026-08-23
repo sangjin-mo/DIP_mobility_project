@@ -90,6 +90,10 @@ DASHBOARD_VISION_PI_STATE_TOKEN=replace-with-a-shared-secret
 DASHBOARD_VISION_PI_CAPTURE_URL=http://webcam-pi.local:8002
 DASHBOARD_LIVE_POLL_INTERVAL_S=1.0
 DASHBOARD_TELEMETRY_STALE_AFTER_S=3.0
+# ai_report's event API (ADR-0009-llm-inferred-crop-zones.md). The
+# dashboard is what marks a patrol's start/end now, since drive_ver2 never
+# sends PATROL_START/PATROL_END itself.
+DASHBOARD_AI_REPORT_EVENT_URL=http://127.0.0.1:9101/api/events
 DASHBOARD_ROVER_CONTROL_URL=http://raspberry-pi.local:9200/api/control
 # Optional; defaults to the /api/status sibling of ROVER_CONTROL_URL.
 DASHBOARD_ROVER_STATUS_URL=http://raspberry-pi.local:9200/api/status

@@ -281,7 +281,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 
 | Function | Calls | Called by |
 |---|---|---|
-| `run_patrol_pipeline` | `ingest/vis_watcher.py::VisWatcher.watch`, `Store.telemetry_for_patrol`/`events_for_patrol`/`analysis_for_patrol`/`received_telemetry_seqs`/`max_telemetry_seq`, `pipeline/segment.py::segment_patrol`, `pipeline/aggregate.py::aggregate`, `pipeline/select_images.py::apply_image_selection`/`load_selected_images`/`copy_and_resize_images`, `pipeline/payload.py::build_payload`/`write_payload`, `llm/client.py::generate_report`, `render/markdown.py::render_report`, `storage/layout.py::write_report` | `cli.py::_make_patrol_end_trigger`'s `trigger` closure (production, as a background `asyncio.Task`); directly by `tests/test_orchestration.py` |
+| `run_patrol_pipeline` | `ingest/vis_watcher.py::VisWatcher.watch`, `Store.events_for_patrol`/`analysis_for_patrol`/`received_telemetry_seqs`/`max_telemetry_seq`, `pipeline/segment.py::segment_by_crop_type` (ADR-0009 — not `segment_patrol`), `pipeline/aggregate.py::aggregate`/`apply_crop_type_zone_names`, `pipeline/select_images.py::apply_image_selection`/`load_selected_images`/`copy_and_resize_images`, `pipeline/payload.py::build_payload`/`write_payload`, `llm/client.py::generate_report`, `render/markdown.py::render_report`, `storage/layout.py::write_report` | `cli.py::_make_patrol_end_trigger`'s `trigger` closure (production, as a background `asyncio.Task`); directly by `tests/test_orchestration.py` |
 
 ### `devtools/fake_rover.py`
 
@@ -313,7 +313,9 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_boundaries_from_distance` | — | `segment_patrol`, fallback path; also called directly by `tests/test_segment.py` to unit-test the distance-integration mechanic in isolation |
 | `_build_windows` | `_fill_window` | `segment_patrol` |
 | `_fill_window` | — | `_build_windows` |
-| `PatrolSegmentation.zones` | — | `pipeline/aggregate.py::aggregate`; `PatrolSegmentation.obstruction_counts`; `pipeline/select_images.py::apply_image_selection`/`copy_and_resize_images` |
+| `dominant_crop_class` | — | `segment_by_crop_type`; `pipeline/aggregate.py::apply_crop_type_zone_names`; `tests/test_segment.py` |
+| `segment_by_crop_type` (ADR-0009) | `_first_ts`, `_last_ts`, `dominant_crop_class` | `orchestration.py::run_patrol_pipeline`; `tests/test_segment.py` |
+| `PatrolSegmentation.zones` | — | `pipeline/aggregate.py::aggregate`/`apply_crop_type_zone_names`; `PatrolSegmentation.obstruction_counts`; `pipeline/select_images.py::apply_image_selection`/`copy_and_resize_images` |
 | `PatrolSegmentation.obstruction_counts` | `.zones` | `render/markdown.py::render_report`; `pipeline/payload.py::build_payload` |
 
 ### `pipeline/aggregate.py`
@@ -325,6 +327,7 @@ Not "called" so much as constructed/parsed. See the module docstring in
 | `_worst_status` | — | `aggregate` |
 | `_stat` | — | `_aggregate_zone` |
 | `_aggregate_zone` | `_stat`; constructs `ZoneMetadata`/`ZoneEnv` | `aggregate`, once per non-transit `ZoneWindow` |
+| `apply_crop_type_zone_names` (ADR-0009) | `pipeline/segment.py::dominant_crop_class`; `settings.CROP_DISPLAY_NAMES` lookup | `orchestration.py::run_patrol_pipeline`, right after `aggregate`; directly by `tests/test_aggregate.py` |
 
 ### `render/markdown.py`
 

@@ -26,6 +26,7 @@ from web_dashboard.services.control_service import (
 )
 from web_dashboard.services.crop_report_service import CropReportService
 from web_dashboard.services.live_service import LiveStateService
+from web_dashboard.services.patrol_event_service import PatrolEventService
 from web_dashboard.services.report_service import (
     InvalidReportError,
     ReportNotFoundError,
@@ -88,6 +89,10 @@ def create_app(
         token=web_config.VISION_PI_STATE_TOKEN,
         timeout_s=web_config.VISION_PI_STATE_TIMEOUT_S,
     )
+    patrol_events = PatrolEventService(
+        web_config.AI_REPORT_EVENT_URL,
+        timeout_s=web_config.AI_REPORT_EVENT_TIMEOUT_S,
+    )
 
     templates = Environment(
         loader=FileSystemLoader(PACKAGE_ROOT / "templates"),
@@ -115,6 +120,8 @@ def create_app(
             "vision_pi_state_configured": vision_state.configured,
             "vision_pi_capture_configured": vision_state.capture_configured,
             "control_configured": control.configured,
+            "patrol_events_configured": patrol_events.configured,
+            "active_patrol_id": patrol_events.active_patrol_id,
             "weather_configured": weather.configured,
             "weather_refresh_interval_s": web_config.WEATHER_REFRESH_INTERVAL_MINUTES * 60,
             "default_target_speed_mps": web_config.DEFAULT_TARGET_SPEED_MPS,
@@ -159,12 +166,14 @@ def create_app(
             )
         result = await _control_call(control, DriveCommand.START, speed)
         await _observe_vision_state(vision_state, result)
+        result["patrol_id"] = await asyncio.to_thread(patrol_events.start_patrol)
         return result
 
     @app.post("/api/control/stop")
     async def stop_rover() -> dict:
         result = await _control_call(control, DriveCommand.STOP)
         await _observe_vision_state(vision_state, result)
+        result["patrol_id"] = await asyncio.to_thread(patrol_events.end_patrol)
         return result
 
     @app.post("/api/control/heartbeat")

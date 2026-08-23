@@ -54,6 +54,7 @@ These are invariants. A change that breaks one is wrong even if tests pass.
 2. **Aggregation is deterministic and independently runnable.** `aggregate()` must produce identical output for identical input, with no network calls. A full report must be producible with the LLM disabled.
 3. **Structured output only.** The LLM returns JSON against a strict schema. Markdown is rendered from a Jinja template. Never ask the model for Markdown.
 4. **Zone assignment comes from events, never from elapsed time.** See `docs/01-interface-contracts.md` §C1 and `docs/02-ai-subsystem-spec.md` §5. This is the single most important correctness rule in the system.
+   > **Amended by ADR-0009** (`ADR-0009-llm-inferred-crop-zones.md`): `drive_ver2` never sends `ZONE_ENTER` or any other event/telemetry, so a third path, `pipeline/segment.py::segment_by_crop_type`, groups zones by classified crop type instead. The rule's intent — never fabricate a zone boundary from elapsed time — still holds; crop-type grouping doesn't use elapsed time at all. Read the ADR before touching `orchestration.py`'s choice of segmentation function.
 5. **Never fabricate data on missing input.** Absent, lost, or low-quality data is reported as a limitation in the output. Coverage and packet-loss figures are part of the report, not hidden.
 6. **Never write outside the output directory.** Other teams own their paths.
 7. **API keys come from the environment.** Never hardcoded, never logged, never committed.

@@ -91,11 +91,18 @@ def _mock_client(zone_ids: list[int]) -> MagicMock:
 
 
 async def test_full_pipeline_writes_a_complete_report(tmp_path: Path, store):
+    """ADR-0009: zones are grouped by classified crop type, not by the
+    fake-rover "zone" concept `_populate_store`/`_write_vis_results` still
+    use to spread fixture data around -- `fake_vis.generate_analysis_results`
+    always classifies as `class: "tomato"` regardless of which fake zone it
+    was generated for, so all of it collapses into exactly one crop-type
+    zone here.
+    """
     settings = _settings(tmp_path)
     zone_ids = _populate_store(store)
     _write_vis_results(settings.DATA_ROOT, zone_ids)
 
-    report_dir = await run_patrol_pipeline(PATROL_ID, store, settings, llm_client=_mock_client(zone_ids))
+    report_dir = await run_patrol_pipeline(PATROL_ID, store, settings, llm_client=_mock_client([1]))
 
     assert report_dir is not None
     assert (report_dir / "report.md").is_file()
@@ -105,7 +112,8 @@ async def test_full_pipeline_writes_a_complete_report(tmp_path: Path, store):
     metadata = json.loads((report_dir / "metadata.json").read_text())
     assert metadata["llm"]["enabled"] is True
     assert metadata["llm"]["input_tokens"] == 400
-    assert len(metadata["zones"]) == len(zone_ids)
+    assert len(metadata["zones"]) == 1
+    assert metadata["zones"][0]["zone_name"] == "토마토구역"
 
     images = sorted(p.name for p in (report_dir / "images").iterdir())
     assert images  # at least one image was selected and resized
@@ -145,7 +153,8 @@ async def test_proceeds_without_vis_complete_after_timeout(tmp_path: Path, store
     zone_ids = _populate_store(store)
     _write_vis_results(settings.DATA_ROOT, zone_ids, complete=False)  # no _COMPLETE marker
 
-    report_dir = await run_patrol_pipeline(PATROL_ID, store, settings, llm_client=_mock_client(zone_ids))
+    # ADR-0009: all fake_vis detections classify as "tomato" -> one crop-type zone.
+    report_dir = await run_patrol_pipeline(PATROL_ID, store, settings, llm_client=_mock_client([1]))
 
     assert report_dir is not None  # did not hang or crash waiting for _COMPLETE
     metadata = json.loads((report_dir / "metadata.json").read_text())

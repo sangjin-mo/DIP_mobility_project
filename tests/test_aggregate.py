@@ -16,8 +16,8 @@ from ai_report.models import (
     ReportStatus,
     TelemetryPacket,
 )
-from ai_report.pipeline.aggregate import aggregate
-from ai_report.pipeline.segment import ZoneWindow, segment_patrol
+from ai_report.pipeline.aggregate import aggregate, apply_crop_type_zone_names
+from ai_report.pipeline.segment import ZoneWindow, segment_by_crop_type, segment_patrol
 
 PATROL_ID = "20260813_1430"
 
@@ -36,6 +36,10 @@ def telemetry(seq: int, ts_ms: int, temp_c: float | None = 25.0, humid_pct: floa
 
 def detection(state: CropState, count: int, confidence: float | None = 0.9) -> Detection:
     return Detection.model_validate({"class": "tomato", "state": state.value, "count": count, "confidence": confidence})
+
+
+def detection_of_class(class_: str, state: CropState = CropState.NORMAL, count: int = 1) -> Detection:
+    return Detection.model_validate({"class": class_, "state": state.value, "count": count, "confidence": 0.9})
 
 
 def analysis(image_id: str, ts_ms: int, detections: list[Detection]) -> AnalysisResult:
@@ -263,3 +267,50 @@ def test_full_pipeline_schema_round_trip():
     with open("contracts/schemas/c3-metadata.schema.json") as f:
         schema = json.load(f)
     Draft202012Validator(schema).validate(data)
+
+
+# --- ADR-0009: apply_crop_type_zone_names -----------------------------------
+
+
+def test_apply_crop_type_zone_names_renames_zones_to_crop_display_names():
+    settings = get_settings()
+    images = [
+        analysis("a", 0, [detection_of_class("tomato", count=3)]),
+        analysis("b", 1000, [detection_of_class("chili_pepper", count=2)]),
+    ]
+    seg = segment_by_crop_type(PATROL_ID, [], images)
+    agg = aggregate(seg, udp_received=0, udp_expected=0, settings=settings)
+
+    renamed = apply_crop_type_zone_names(agg, seg, settings)
+
+    names_by_zone_id = {z.zone_id: z.zone_name for z in renamed.zones}
+    assert names_by_zone_id == {1: "고추구역", 2: "토마토구역"}  # alphabetical: chili_pepper, tomato
+
+
+def test_apply_crop_type_zone_names_falls_back_to_raw_class_when_unmapped():
+    settings = get_settings()
+    images = [analysis("a", 0, [detection_of_class("watermelon", count=1)])]
+    seg = segment_by_crop_type(PATROL_ID, [], images)
+    agg = aggregate(seg, udp_received=0, udp_expected=0, settings=settings)
+
+    renamed = apply_crop_type_zone_names(agg, seg, settings)
+
+    assert renamed.zones[0].zone_name == "watermelon구역"
+
+
+def test_apply_crop_type_zone_names_leaves_deterministic_figures_unchanged():
+    """Only zone_name changes -- status, observations, and every other
+    number aggregate() computed must survive untouched (GUIDELINES.md hard
+    rule 1: numbers never move outside the deterministic step).
+    """
+    settings = get_settings()
+    images = [analysis("a", 0, [detection_of_class("tomato", CropState.SUSPECTED_DISEASE, count=5)])]
+    seg = segment_by_crop_type(PATROL_ID, [], images)
+    agg = aggregate(seg, udp_received=0, udp_expected=0, settings=settings)
+
+    renamed = apply_crop_type_zone_names(agg, seg, settings)
+
+    assert renamed.zones[0].status == agg.zones[0].status
+    assert renamed.zones[0].observations == agg.zones[0].observations
+    assert renamed.overall_status == agg.overall_status
+    assert renamed.data_completeness == agg.data_completeness

@@ -39,6 +39,14 @@ class DashboardSettings(BaseSettings):
     # http://WEBCAM_PI_IP:8002. This process already owns the webcam.
     VISION_PI_CAPTURE_URL: str | None = None
 
+    # ai_report's HTTP event API (its own EVENT_PORT, default 9101 -- see
+    # ai_report/config.py -- not the rover control agent below). Set to
+    # e.g. http://127.0.0.1:9101/api/events when ai_report runs on this
+    # same machine. ADR-0009: the dashboard is what now marks a patrol's
+    # start/end, since drive_ver2 never emits these events itself.
+    AI_REPORT_EVENT_URL: str | None = None
+    AI_REPORT_EVENT_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
+
     # Raspberry Pi control agent. This must point at the agent's command
     # endpoint, for example http://192.168.0.42:9200/api/control.
     ROVER_CONTROL_URL: str | None = None

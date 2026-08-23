@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     # isn't in this map, so an unconfigured route still produces valid output.
     ZONE_NAMES: dict[int, str] = Field(default_factory=dict)
 
+    # crop class (AnalysisResult.detections[].class, lowercase ASCII per
+    # C2.2) -> Korean display name, for a crop-type zone's zone_name
+    # (ADR-0009: pipeline/aggregate.py::aggregate_zones_by_crop_type).
+    # Falls back to the raw class string when a class isn't in this map, so
+    # an unrecognised crop still produces a valid (if less pretty) zone name.
+    CROP_DISPLAY_NAMES: dict[str, str] = Field(
+        default_factory=lambda: {"tomato": "토마토", "chili_pepper": "고추"}
+    )
+
     # LLM (used from A5 onward)
     LLM_ENABLED: bool = True
     LLM_MODEL: str = "gpt-5.6-luna"
