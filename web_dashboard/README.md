@@ -48,6 +48,32 @@ python -m web_dashboard
 
 Open `http://127.0.0.1:8080`.
 
+### Team / multi-laptop access
+
+`web_dashboard` is the single control tower: every laptop's browser talks
+only to it, and it forwards drive control, vision capture, and reports to
+the other teams' backends. That only works if everyone points at **one
+running instance**, not their own local copy.
+
+- **Only one designated Mac/PC runs the backend processes** — `web_dashboard`
+  itself, plus `ai_report`'s ingest listener (which is what actually writes
+  `sessions.db`) and the vision team's `pc_server`. `scripts/start_central_server.sh`
+  starts all three together, opens the macOS firewall for the duration, and
+  closes it again on exit.
+- **Everyone else only opens a browser.** Do not run `python -m web_dashboard`
+  on your own laptop "just to look" — your local `sessions.db`/`reports/`
+  will be empty, so the dashboard will look reachable but show none of the
+  real data. The header badge next to the logo (대시보드 인스턴스) shows the
+  serving machine's hostname and whether it found the shared database; a
+  red "로컬 전용" warning there means you're on a stray local instance.
+- **Use a stable address, not a DHCP IP.** macOS already advertises this
+  machine at `http://<Bonjour hostname>.local:8080` (check yours with
+  `scutil --get LocalHostName`) — that name doesn't change between
+  sessions the way a DHCP-assigned IP does. This mirrors the
+  `raspberry-pi.local` pattern already used below for the Pis.
+- `DASHBOARD_HOST` must stay `0.0.0.0` (the default) for other laptops to
+  reach it at all — `127.0.0.1` is loopback-only.
+
 Optional `.env` values:
 
 ```dotenv

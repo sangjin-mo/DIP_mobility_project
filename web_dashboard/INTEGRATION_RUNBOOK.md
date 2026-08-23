@@ -11,7 +11,7 @@ WEB 대시보드가 각 팀이 공개한 입출력만 사용하는 구성을 설
 | 웹캠 Raspberry Pi | 1초 간격 정지 이미지 저장, 요청 시 PC 전송 | `POST :8001/trigger-upload` |
 | 대시보드 PC의 VIS 서버 | 웹캠 Pi 전송 요청, 이미지 수신·목록 제공 | `POST :8000/control/request-transfer`, `GET :8000/images` |
 | 대시보드 PC의 AI/LLM | `reports/<patrol_id>/` 생성 | 파일 기반 `metadata.json`, `report.md` |
-| 대시보드 PC의 WEB 서버 | 브라우저 단일 진입점 | `http://PC_IP:8080` |
+| 대시보드 PC의 WEB 서버 | 브라우저 단일 진입점(제어탑) | `http://<PC 로컬 호스트 이름>.local:8080` |
 
 카메라 촬영과 차량 제어는 서로 독립적이다. 카메라 버튼은 차량의 START,
 STOP API를 호출하지 않는다.
@@ -110,12 +110,19 @@ VIS 서버가 준비된 것이다.
 않는다.
 
 ```dotenv
+DASHBOARD_HOST=0.0.0.0
 DASHBOARD_VISION_SERVER_URL=http://127.0.0.1:8000
 DASHBOARD_ROVER_CONTROL_URL=http://DONKEY_PI_IP:9200/api/control
 DASHBOARD_ROVER_CONTROL_TOKEN=CONTROL_SECRET
 DASHBOARD_DEFAULT_TARGET_SPEED_MPS=0.25
 DASHBOARD_MAX_TARGET_SPEED_MPS=0.50
+# Optional: best-effort SSH remote start of the drive Pi's control process
+DRIVE_PI_SSH_HOST=DONKEY_PI_IP
+DRIVE_PI_SSH_USER=pi
 ```
+
+`DASHBOARD_HOST`는 반드시 `0.0.0.0`이어야 한다. `127.0.0.1`이면 이 PC에서만
+접속되고 다른 노트북에서는 대시보드에 전혀 연결할 수 없다.
 
 `DASHBOARD_MAX_TARGET_SPEED_MPS`는 Pi의 `DASHBOARD_MAX_SPEED_MPS`보다 크게
 설정하지 않는다. 슬라이더 값은 START 명령의 `target_speed_mps`로 전달되며,
@@ -128,15 +135,33 @@ Test-NetConnection DONKEY_PI_IP -Port 9200
 Invoke-RestMethod http://DONKEY_PI_IP:9200/api/status
 ```
 
-실행한다.
+**한 대의 PC만 대시보드 담당 PC가 된다.** 그 PC에서 `ai_report` 수집
+리스너, 비전 `pc_server`, `web_dashboard`를 함께 실행한다. macOS에서는
+아래 스크립트 하나로 세 가지를 모두 실행하고, 종료 시(Ctrl+C) 방화벽도
+자동으로 다시 잠근다.
 
-```powershell
-cd C:\path\to\DIP_mobility_project
-.\.venv\Scripts\python.exe -m web_dashboard
+```bash
+cd /path/to/FarmRover
+./scripts/start_central_server.sh
 ```
 
-`http://127.0.0.1:8080`을 연다. 다른 기기에서는 Windows 방화벽에서 8080번
-포트를 허용한 뒤 `http://PC_IP:8080`으로 접속한다.
+다른 팀원은 각자 `python -m web_dashboard`를 실행하지 않는다 — 각자의
+로컬 `sessions.db`는 비어 있으므로 겉보기엔 정상 작동해도 실제 순찰
+데이터를 전혀 보여주지 못한다. 대시보드 헤더의 "대시보드 인스턴스"
+배지가 대시보드 담당 PC의 호스트 이름과 공유 데이터 연결 여부를 보여주므로,
+잘못된(로컬) 인스턴스에 접속했는지 바로 확인할 수 있다.
+
+다른 기기에서는 대시보드 담당 PC의 macOS 로컬 호스트 이름으로 접속한다
+(`scutil --get LocalHostName`으로 확인). 세션마다 바뀌는 DHCP IP 대신
+안정적인 주소다.
+
+```text
+http://<대시보드 PC 로컬 호스트 이름>.local:8080
+```
+
+`scripts/start_central_server.sh`가 실행 중에는 macOS 방화벽을 열어 두므로
+Windows 방화벽 수동 설정과 달리 별도 조치가 필요 없다. 스크립트를
+종료하면(Ctrl+C) 방화벽도 다시 닫힌다.
 
 ## 6. LLM 레포트
 

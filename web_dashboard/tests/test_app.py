@@ -1,3 +1,4 @@
+import socket as socket_module
 import time
 from unittest.mock import patch
 
@@ -35,7 +36,9 @@ def test_dashboard_and_live_socket_reuse_existing_store(tmp_path):
 
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
-        assert client.get("/api/status").json()["database_exists"] is True
+        status = client.get("/api/status").json()
+        assert status["database_exists"] is True
+        assert status["host_hostname"] == socket_module.gethostname()
         assert client.get("/api/patrols").json() == []
         with client.websocket_connect("/ws/live") as socket:
             snapshot = socket.receive_json()

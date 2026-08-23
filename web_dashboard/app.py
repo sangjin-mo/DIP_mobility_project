@@ -7,6 +7,7 @@ aggregation, LLM calls, or report calculations are duplicated here.
 from __future__ import annotations
 
 import asyncio
+import socket
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -94,6 +95,7 @@ def create_app(
     async def status() -> dict:
         return {
             "service": "web_dashboard",
+            "host_hostname": socket.gethostname(),
             "data_root": str(ai_config.DATA_ROOT),
             "report_root": str(ai_config.REPORT_ROOT),
             "database_exists": ai_config.sqlite_path.is_file(),

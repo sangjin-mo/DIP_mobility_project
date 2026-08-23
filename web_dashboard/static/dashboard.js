@@ -57,6 +57,7 @@ async function loadControlStatus() {
   try {
     const response = await fetch("/api/status");
     const status = await response.json();
+    updateInstanceStatus(status);
     controlConfigured = Boolean(status.control_configured);
     visionCaptureConfigured = Boolean(status.vision_capture_configured);
     const speedInput = byId("target-speed");
@@ -90,8 +91,23 @@ async function loadControlStatus() {
     controlReachable = false;
     byId("control-status").textContent = "API 확인 실패";
     showControlResult("대시보드 서버의 제어 상태를 확인하지 못했습니다.", "error");
+    const instanceEl = byId("instance-status");
+    instanceEl.textContent = "연결 실패";
+    instanceEl.classList.add("warn");
   }
   setControlButtons();
+}
+
+function updateInstanceStatus(status) {
+  const instanceEl = byId("instance-status");
+  const hostname = status.host_hostname ?? "알 수 없음";
+  if (status.database_exists) {
+    instanceEl.textContent = `${hostname} · 공유 데이터 연결됨`;
+    instanceEl.classList.remove("warn");
+  } else {
+    instanceEl.textContent = `⚠ ${hostname} · 로컬 전용 (공유 데이터 없음)`;
+    instanceEl.classList.add("warn");
+  }
 }
 
 function applyRoverState(state, targetSpeed = null, details = {}) {
