@@ -30,6 +30,12 @@ class DashboardSettings(BaseSettings):
     VISION_TIMEOUT_S: float = Field(default=35.0, gt=0, le=60)
     VISION_MAX_IMAGE_BYTES: int = Field(default=10 * 1024 * 1024, gt=0)
 
+    # Separate webcam Raspberry Pi state receiver. This is intentionally not
+    # the rover-control Pi and not the VIS PC server.
+    VISION_PI_STATE_URL: str | None = None
+    VISION_PI_STATE_TOKEN: str | None = None
+    VISION_PI_STATE_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
+
     # Raspberry Pi control agent. This must point at the agent's command
     # endpoint, for example http://192.168.0.42:9200/api/control.
     ROVER_CONTROL_URL: str | None = None

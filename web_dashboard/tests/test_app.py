@@ -338,6 +338,68 @@ def test_control_status_api_returns_actual_rover_state(tmp_path):
     assert response.json() == rover_status
 
 
+def test_control_state_is_observed_for_webcam_pi_without_changing_response(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(
+            ROVER_CONTROL_URL="http://rover.local:9200/api/control",
+            VISION_PI_STATE_URL="http://webcam-pi.local:8002/api/drive-state",
+        ),
+    )
+    accepted = {
+        "accepted": True,
+        "command": "START",
+        "rover": {"accepted": True, "state": "RUNNING", "target_speed_mps": 0.25},
+    }
+
+    with (
+        patch("web_dashboard.app.RoverControlService.send", return_value=accepted),
+        patch("web_dashboard.app.VisionStateService.observe") as observe,
+        TestClient(app) as client,
+    ):
+        response = client.post("/api/control/start", json={"target_speed_mps": 0.25})
+        status = client.get("/api/status")
+
+    assert response.json() == accepted
+    assert status.json()["vision_pi_state_configured"] is True
+    observe.assert_called_once_with(accepted["rover"])
+
+
+def test_capture_mode_route_forwards_to_webcam_pi(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(
+            VISION_PI_STATE_URL="http://webcam-pi.local:8002/api/drive-state",
+        ),
+    )
+    capture_status = {
+        "enabled": True,
+        "saved_count": 2,
+        "last_filename": "2026-08-23/cam.jpg",
+        "last_error": None,
+    }
+
+    with (
+        patch(
+            "web_dashboard.app.VisionStateService.set_capture_mode",
+            return_value=capture_status,
+        ) as set_capture_mode,
+        TestClient(app) as client,
+    ):
+        response = client.post("/api/vision/capture-mode", json={"enabled": True})
+
+    assert response.json() == capture_status
+    set_capture_mode.assert_called_once_with(True)
+
+
 def test_weather_api_is_disabled_until_kma_settings_are_configured(tmp_path):
     app = create_app(
         ai_settings=Settings(

@@ -63,6 +63,7 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .vision-actions button { min-width: 0; padding: 9px 7px; font-size: 10px; }
 .vision-actions .vision-primary { color: #fff; border-color: var(--green); background: var(--green); }
 .vision-actions .vision-danger { color: #b52626; border-color: #e6bcbc; background: #fff7f7; }
+.vision-actions #vision-capture[aria-pressed="true"] { color: #fff; border-color: #d07812; background: #d98516; }
 .vision-selection-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .vision-selection-bar label { display: flex; align-items: center; gap: 6px; color: var(--text); font-weight: 700; cursor: pointer; }
 .vision-selection-bar input, .vision-image-meta input { accent-color: var(--green); }
