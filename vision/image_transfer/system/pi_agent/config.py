@@ -18,8 +18,9 @@ MAX_CONSECUTIVE_FAILURES = 5  # 이 횟수 연속 실패하면 카메라 재연�
 RECONNECT_RETRY_DELAY_SEC = 3.0  # 재연결 재시도 간격
 
 # 전송 대상 (PC 수신 서버)
-# 결정 사항(design/README.md §8): PC 고정 IP는 아직 미정 — 실제 PC IP로 바꿔서 사용
-SERVER_HOST = "192.168.2.XXX"
+# 대시보드 PC(Seung-Jins-Macbook-3)의 현재 IP. DHCP라 바뀔 수 있음 — 바뀌면
+# 여기와 실제 Pi에 배포된 파일 둘 다 갱신할 것 (2026-08-23에 .93 -> 이 값으로 갱신).
+SERVER_HOST = "192.168.2.175"
 SERVER_PORT = 8000
 SERVER_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
 UPLOAD_TIMEOUT_SEC = 3.0
