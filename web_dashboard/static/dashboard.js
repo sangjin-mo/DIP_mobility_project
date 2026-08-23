@@ -5,6 +5,7 @@ let controlReachable = false;
 let controlBusy = false;
 let roverState = "UNKNOWN";
 let visionCaptureConfigured = false;
+let visionPiStateConfigured = false;
 let visionImages = [];
 let driveHeartbeatActive = false;
 let driveHeartbeatTimer = null;
@@ -60,6 +61,7 @@ async function loadControlStatus() {
     updateInstanceStatus(status);
     controlConfigured = Boolean(status.control_configured);
     visionCaptureConfigured = Boolean(status.vision_capture_configured);
+    visionPiStateConfigured = Boolean(status.vision_pi_state_configured);
     const speedInput = byId("target-speed");
     speedInput.max = Number(status.max_target_speed_mps ?? 0.5).toFixed(2);
     speedInput.value = Number(status.default_target_speed_mps ?? 0.25).toFixed(2);
@@ -73,10 +75,12 @@ async function loadControlStatus() {
     ["capture-image", "vision-refresh", "vision-delete-local"].forEach((id) => {
       byId(id).disabled = !visionCaptureConfigured;
     });
+    byId("vision-capture").disabled = !visionPiStateConfigured;
     byId("capture-result").textContent = visionCaptureConfigured
       ? "비전 서버 연결을 확인하고 있습니다."
       : "DASHBOARD_VISION_SERVER_URL 설정이 필요합니다.";
     if (visionCaptureConfigured) loadVisionImages();
+    if (visionPiStateConfigured) loadVisionCaptureMode();
 
     if (controlConfigured) {
       await loadRoverStatus();
@@ -578,6 +582,56 @@ async function deleteLocalVisionImages() {
   }
 }
 
+function renderVisionCaptureMode(result) {
+  const button = byId("vision-capture");
+  const enabled = Boolean(result.enabled);
+  button.setAttribute("aria-pressed", String(enabled));
+  button.textContent = enabled ? "■ 촬영 모드 정지" : "📷 촬영 모드 시작";
+  button.disabled = !visionPiStateConfigured;
+}
+
+async function loadVisionCaptureMode() {
+  try {
+    const response = await fetch("/api/vision/capture-mode");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    renderVisionCaptureMode(result);
+    if (result.last_error) {
+      byId("capture-result").textContent = `촬영 모드 오류: ${result.last_error}`;
+    }
+  } catch (error) {
+    byId("vision-capture").disabled = true;
+    byId("capture-result").textContent = `비전 Pi 촬영 상태 확인 실패: ${error.message}`;
+  }
+}
+
+async function toggleVisionCaptureMode() {
+  const button = byId("vision-capture");
+  const enabled = button.getAttribute("aria-pressed") !== "true";
+  button.disabled = true;
+  byId("capture-result").textContent = enabled
+    ? "비전 Pi에서 촬영 모드를 시작하고 있습니다."
+    : "비전 Pi 촬영 모드를 정지하고 있습니다.";
+  try {
+    const response = await fetch("/api/vision/capture-mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    renderVisionCaptureMode(result);
+    byId("capture-result").textContent = result.enabled
+      ? `촬영 모드 실행 중 · 로컬 저장 ${result.saved_count ?? 0}장`
+      : `촬영 모드 정지 · 총 로컬 저장 ${result.saved_count ?? 0}장`;
+    if (result.last_error) throw new Error(result.last_error);
+    if (result.enabled) window.setTimeout(loadVisionCaptureMode, 750);
+  } catch (error) {
+    byId("capture-result").textContent = `촬영 모드 변경 실패: ${error.message}`;
+    await loadVisionCaptureMode();
+  }
+}
+
 function observationSummary(observations) {
   const rows = [];
   Object.entries(observations || {}).forEach(([crop, states]) => {
@@ -763,6 +817,7 @@ byId("capture-image").addEventListener("click", transferVisionImages);
 byId("vision-refresh").addEventListener("click", () => loadVisionImages());
 byId("vision-delete-selected").addEventListener("click", deleteSelectedVisionImages);
 byId("vision-delete-local").addEventListener("click", deleteLocalVisionImages);
+byId("vision-capture").addEventListener("click", toggleVisionCaptureMode);
 byId("vision-select-all").addEventListener("change", (event) => {
   document.querySelectorAll(".vision-image-checkbox").forEach((input) => {
     input.checked = event.target.checked;

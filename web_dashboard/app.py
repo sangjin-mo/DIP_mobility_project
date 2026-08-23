@@ -36,6 +36,7 @@ from web_dashboard.services.vision_service import (
     VisionResponseError,
     VisionUnavailableError,
 )
+from web_dashboard.services.vision_state_service import VisionStateService
 from web_dashboard.services.weather_service import KmaWeatherService, WeatherUnavailableError
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -47,6 +48,10 @@ class StartRequest(BaseModel):
 
 class VisionDeleteRequest(BaseModel):
     paths: list[str] = Field(min_length=1, max_length=500)
+
+
+class VisionCaptureModeRequest(BaseModel):
+    enabled: bool
 
 
 def create_app(
@@ -77,6 +82,11 @@ def create_app(
         timeout_s=web_config.VISION_TIMEOUT_S,
         max_image_bytes=web_config.VISION_MAX_IMAGE_BYTES,
     )
+    vision_state = VisionStateService(
+        web_config.VISION_PI_STATE_URL,
+        token=web_config.VISION_PI_STATE_TOKEN,
+        timeout_s=web_config.VISION_PI_STATE_TIMEOUT_S,
+    )
 
     templates = Environment(
         loader=FileSystemLoader(PACKAGE_ROOT / "templates"),
@@ -101,6 +111,7 @@ def create_app(
             "database_exists": ai_config.sqlite_path.is_file(),
             "camera_configured": vision.configured or bool(web_config.CAMERA_URL),
             "vision_capture_configured": vision.configured,
+            "vision_pi_state_configured": vision_state.configured,
             "control_configured": control.configured,
             "weather_configured": weather.configured,
             "weather_refresh_interval_s": web_config.WEATHER_REFRESH_INTERVAL_MINUTES * 60,
@@ -144,23 +155,56 @@ def create_app(
                 status_code=422,
                 detail=f"목표 속도는 {web_config.MAX_TARGET_SPEED_MPS:.2f} m/s 이하여야 합니다.",
             )
-        return await _control_call(control, DriveCommand.START, speed)
+        result = await _control_call(control, DriveCommand.START, speed)
+        await _observe_vision_state(vision_state, result)
+        return result
 
     @app.post("/api/control/stop")
     async def stop_rover() -> dict:
-        return await _control_call(control, DriveCommand.STOP)
+        result = await _control_call(control, DriveCommand.STOP)
+        await _observe_vision_state(vision_state, result)
+        return result
 
     @app.post("/api/control/heartbeat")
     async def heartbeat_rover() -> dict:
-        return await _control_call(control, DriveCommand.HEARTBEAT)
+        result = await _control_call(control, DriveCommand.HEARTBEAT)
+        await _observe_vision_state(vision_state, result)
+        return result
 
     @app.get("/api/control/status")
     async def rover_status() -> dict:
         try:
-            return await asyncio.to_thread(control.status)
+            result = await asyncio.to_thread(control.status)
         except ControlUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ControlCommandError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        await _observe_vision_state(vision_state, result)
+        return result
+
+    @app.get("/api/vision/drive-state-delivery")
+    async def vision_drive_state_delivery() -> dict:
+        return {
+            "configured": vision_state.configured,
+            "last_result": vision_state.last_result,
+        }
+
+    @app.get("/api/vision/capture-mode")
+    async def vision_capture_mode_status() -> dict:
+        try:
+            return await asyncio.to_thread(vision_state.capture_status)
+        except ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/vision/capture-mode")
+    async def set_vision_capture_mode(request: VisionCaptureModeRequest) -> dict:
+        try:
+            return await asyncio.to_thread(vision_state.set_capture_mode, request.enabled)
+        except ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/camera/latest")
@@ -306,3 +350,8 @@ async def _control_call(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ControlCommandError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+async def _observe_vision_state(service: VisionStateService, result: dict) -> None:
+    rover_status = result.get("rover") if isinstance(result.get("rover"), dict) else result
+    await asyncio.to_thread(service.observe, rover_status)
