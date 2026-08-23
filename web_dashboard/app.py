@@ -202,7 +202,7 @@ def create_app(
         try:
             from ai_report.cli import _regenerate
 
-            await _regenerate(patrol_id, ai_config.REPORT_ROOT)
+            await _regenerate(patrol_id, ai_config.REPORT_ROOT, ai_config)
         except FileNotFoundError as exc:
             raise HTTPException(
                 status_code=409,

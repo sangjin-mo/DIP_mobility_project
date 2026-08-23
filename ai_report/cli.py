@@ -19,7 +19,7 @@ from pathlib import Path
 
 import uvicorn
 
-from ai_report.config import get_settings
+from ai_report.config import Settings, get_settings
 from ai_report.ingest.event_api import create_app
 from ai_report.ingest.store import Store
 from ai_report.ingest.udp_listener import create_udp_listener
@@ -105,7 +105,7 @@ def _load_report_images(report_dir: Path, payload: Payload) -> dict[str, bytes]:
     return images
 
 
-async def _regenerate(patrol_id: str, report_root: Path) -> Path:
+async def _regenerate(patrol_id: str, report_root: Path, settings: Settings) -> Path:
     """Rebuild `{report_root}/{patrol_id}/` from its own stored `payload.json`.
 
     Spec §11: "`cli.py regenerate {patrol_id}` re-runs ⑤⑥⑦ from the stored
@@ -125,10 +125,14 @@ async def _regenerate(patrol_id: str, report_root: Path) -> Path:
     (A3) already handles overwriting the existing report directory
     atomically, so a failed regenerate leaves the previous report intact.
 
+    `settings` is threaded through by the caller rather than read here via
+    `get_settings()`, so a caller holding a non-default `Settings` (tests,
+    or a web app constructed with injected settings) doesn't have that
+    silently overridden by a fresh env/.env read.
+
     Returns the final report directory. Called by `main` when the
     `regenerate` subcommand is used.
     """
-    settings = get_settings()
     report_dir = report_root / patrol_id
 
     payload = load_payload(report_dir / "payload.json")
@@ -177,8 +181,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         asyncio.run(_serve(args.host))
     elif args.command == "regenerate":
-        report_root = Path(args.report_root) if args.report_root else get_settings().REPORT_ROOT
-        final_dir = asyncio.run(_regenerate(args.patrol_id, report_root))
+        settings = get_settings()
+        report_root = Path(args.report_root) if args.report_root else settings.REPORT_ROOT
+        final_dir = asyncio.run(_regenerate(args.patrol_id, report_root, settings))
         print(f"regenerated report for patrol_id={args.patrol_id} at {final_dir}")
     return 0
 

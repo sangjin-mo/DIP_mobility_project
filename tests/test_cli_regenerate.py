@@ -109,7 +109,7 @@ async def test_regenerate_produces_a_different_report_with_no_data_root(tmp_path
     mock_client.chat.completions.create = AsyncMock(return_value=mock_llm_response(zone_ids))
 
     with patch("ai_report.cli.generate_report", new=patched_generate_report(mock_client)):
-        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports")
+        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports", get_settings())
 
     new_text = (final_dir / "report.md").read_text(encoding="utf-8")
     assert new_text != original_text
@@ -129,7 +129,7 @@ async def test_regenerate_carries_images_forward(tmp_path: Path):
     mock_client.chat.completions.create = AsyncMock(return_value=mock_llm_response(zone_ids))
 
     with patch("ai_report.cli.generate_report", new=patched_generate_report(mock_client)):
-        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports")
+        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports", get_settings())
 
     regenerated_images = sorted(p.name for p in (final_dir / "images").iterdir())
     assert regenerated_images == original_images
@@ -143,7 +143,7 @@ async def test_regenerate_updates_metadata_llm_block(tmp_path: Path):
     mock_client.chat.completions.create = AsyncMock(return_value=mock_llm_response(zone_ids))
 
     with patch("ai_report.cli.generate_report", new=patched_generate_report(mock_client)):
-        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports")
+        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports", get_settings())
 
     metadata = json.loads((final_dir / "metadata.json").read_text())
     assert metadata["llm"]["enabled"] is True
@@ -163,7 +163,7 @@ async def test_regenerate_preserves_deterministic_figures(tmp_path: Path):
     mock_client.chat.completions.create = AsyncMock(return_value=mock_llm_response(zone_ids))
 
     with patch("ai_report.cli.generate_report", new=patched_generate_report(mock_client)):
-        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports")
+        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports", get_settings())
 
     new_metadata = json.loads((final_dir / "metadata.json").read_text())
     assert new_metadata["overall_status"] == original_metadata["overall_status"]
@@ -179,7 +179,7 @@ async def test_regenerate_falls_back_gracefully_when_llm_fails(tmp_path: Path):
     mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("simulated total failure"))
 
     with patch("ai_report.cli.generate_report", new=patched_generate_report(mock_client)):
-        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports")
+        final_dir = await _regenerate(PATROL_ID, tmp_path / "reports", get_settings())
 
     metadata = json.loads((final_dir / "metadata.json").read_text())
     assert metadata["llm"]["enabled"] is False
@@ -194,4 +194,4 @@ async def test_regenerate_falls_back_gracefully_when_llm_fails(tmp_path: Path):
 
 async def test_regenerate_missing_payload_raises_clear_error(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
-        await _regenerate("nonexistent_patrol", tmp_path / "reports")
+        await _regenerate("nonexistent_patrol", tmp_path / "reports", get_settings())
