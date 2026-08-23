@@ -116,7 +116,7 @@ uses the first observed state only as its local baseline and then sends only
 500 ms heartbeats are not forwarded. The receiver stores the latest event in
 `vision_drive_state.json`.
 
-The dashboard can change the active interval from 0.2 to 3600 seconds. The
+The dashboard can change the active interval from 0.2 to 10 seconds. The
 vision Pi applies its configured minimum and returns the actual applied value.
 Only the vision team's `capture.py` opens the camera, avoiding competing webcam
 owners.

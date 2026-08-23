@@ -1,6 +1,8 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 from web_dashboard.services.vision_state_service import VisionStateService
 
 
@@ -97,3 +99,10 @@ def test_capture_interval_is_forwarded_to_webcam_pi_endpoint():
     request = urlopen.call_args.args[0]
     assert request.full_url == "http://webcam-pi.local:8002/set-interval"
     assert json.loads(request.data) == {"interval_sec": 10}
+
+
+@pytest.mark.parametrize("interval", [0.1, 10.1])
+def test_capture_interval_rejects_values_outside_dashboard_range(interval):
+    service = VisionStateService(None, capture_url="http://webcam-pi.local:8002")
+    with pytest.raises(ValueError, match="0.2초 이상 10초 이하"):
+        service.set_capture_interval(interval)

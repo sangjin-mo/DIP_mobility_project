@@ -127,6 +127,8 @@ class VisionStateService:
         }
 
     def set_capture_interval(self, interval_s: float) -> dict:
+        if not 0.2 <= interval_s <= 10.0:
+            raise ValueError("촬영 주기는 0.2초 이상 10초 이하여야 합니다.")
         result = self._request_capture_api(
             "/set-interval",
             method="POST",

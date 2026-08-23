@@ -420,10 +420,12 @@ def test_capture_interval_route_forwards_validated_seconds(tmp_path):
         TestClient(app) as client,
     ):
         accepted = client.post("/api/vision/capture-interval", json={"interval_s": 5})
-        rejected = client.post("/api/vision/capture-interval", json={"interval_s": 0.1})
+        rejected_low = client.post("/api/vision/capture-interval", json={"interval_s": 0.1})
+        rejected_high = client.post("/api/vision/capture-interval", json={"interval_s": 10.1})
 
     assert accepted.json()["interval_s"] == 5.0
-    assert rejected.status_code == 422
+    assert rejected_low.status_code == 422
+    assert rejected_high.status_code == 422
     set_interval.assert_called_once_with(5.0)
 
 

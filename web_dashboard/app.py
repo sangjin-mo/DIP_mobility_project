@@ -51,7 +51,7 @@ class VisionDeleteRequest(BaseModel):
 
 
 class VisionCaptureIntervalRequest(BaseModel):
-    interval_s: float = Field(ge=0.2, le=3600.0)
+    interval_s: float = Field(ge=0.2, le=10.0)
 
 
 def create_app(

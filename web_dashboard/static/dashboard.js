@@ -624,8 +624,8 @@ async function applyVisionCaptureInterval() {
   const input = byId("vision-capture-interval");
   const button = byId("vision-apply-interval");
   const interval = Number(input.value);
-  if (!Number.isFinite(interval) || interval < 0.2 || interval > 3600) {
-    byId("capture-result").textContent = "촬영 주기는 0.2초 이상 3600초 이하로 입력하세요.";
+  if (!Number.isFinite(interval) || interval < 0.2 || interval > 10) {
+    byId("capture-result").textContent = "촬영 주기는 0.2초 이상 10초 이하로 입력하세요.";
     return;
   }
   input.disabled = true;
