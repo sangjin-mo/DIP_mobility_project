@@ -23,8 +23,9 @@ pipeline are not duplicated here.
 - one responsive HTML/CSS/JavaScript dashboard
 - latest telemetry and event over `/ws/live`
 - patrol list, metadata, Markdown, and selected-image APIs
-- webcam still-image transfer through the existing VIS server, enabled by
-  `DASHBOARD_VISION_SERVER_URL` (legacy direct image URLs remain supported)
+- VIS image management through the existing vision-team server: list received
+  images, pull pending Raspberry Pi captures, delete selected PC copies, and
+  clean upload-confirmed Pi copies. Enable it with `DASHBOARD_VISION_SERVER_URL`.
 - latest zone metadata and LLM Markdown report on the crop report screen
 - drive status plus start and immediate-stop commands forwarded to a
   separately configured Raspberry Pi control agent
@@ -70,6 +71,13 @@ DASHBOARD_KMA_NY=90
 DASHBOARD_WEATHER_LOCATION_LABEL=대구광역시 수성구
 DASHBOARD_WEATHER_REFRESH_INTERVAL_MINUTES=30
 ```
+
+The current vision-team server does not publish an HTTP endpoint for a single
+new camera capture or for sending images to the LLM team. Its Pi `capture.py`
+records frames continuously, while `/control/request-transfer` transfers the
+pending files. The dashboard therefore keeps the `촬영` and `분석팀 전송`
+buttons disabled until those two API contracts (URL, authentication, request,
+and response schema) are provided. It does not report a simulated success.
 
 ## KMA weather setup
 

@@ -29,7 +29,7 @@
         <button class="feature-menu-card" type="button" data-dashboard-target="0">
           <span class="feature-number">01</span>
           <span class="feature-icon" aria-hidden="true">📷</span>
-          <span class="feature-copy"><strong>카메라 촬영</strong><small>웹캠 정지 이미지 촬영 및 확인</small></span>
+          <span class="feature-copy"><strong>비전 이미지 관리</strong><small>촬영본 가져오기·확인·삭제 및 분석 연동</small></span>
           <span class="feature-enter" aria-hidden="true">→</span>
         </button>
         <button class="feature-menu-card" type="button" data-dashboard-target="1">
@@ -56,20 +56,36 @@
     <section id="dashboard-workspace" class="dashboard-workspace" hidden>
       <nav class="workspace-navigation" aria-label="기능 화면 탐색">
         <button id="dashboard-home-button" class="home-button" type="button">← 전체 메뉴</button>
-        <strong id="workspace-title">카메라 촬영</strong>
+        <strong id="workspace-title">비전 이미지 관리</strong>
       </nav>
     <section class="dashboard-grid">
-      <article class="panel camera-panel dashboard-slide" data-dashboard-slide aria-label="1 / 4 카메라 촬영" hidden>
+      <article class="panel camera-panel dashboard-slide" data-dashboard-slide aria-label="1 / 4 비전 이미지 관리" hidden>
         <div class="panel-heading">
-          <div><p class="section-kicker">01 · CAMERA</p><h2>카메라 촬영</h2></div>
+          <div><p class="section-kicker">01 · VISION</p><h2>비전 이미지 관리</h2></div>
           <span id="camera-status" class="status-pill neutral">미연결</span>
         </div>
-        <div id="camera-still" class="camera-still"{% if not camera_url %} hidden{% endif %}><img id="camera-image"{% if camera_url %} src="{{ camera_url }}"{% endif %} alt="최근 촬영 이미지"></div>
-        <div id="camera-placeholder" class="camera-placeholder"{% if camera_url %} hidden{% endif %}>
-          <div class="camera-illustration" aria-hidden="true"><span>🌿</span><span>🌱</span><span>🌿</span><i></i></div>
-          <strong>촬영 이미지 대기</strong>
+        <div class="vision-summary" aria-label="비전 이미지 현황">
+          <div><span>수신 이미지</span><strong id="vision-image-count">0장</strong></div>
+          <div><span>선택 이미지</span><strong id="vision-selected-count">0장</strong></div>
         </div>
-        <button id="capture-image" class="capture-button" type="button" disabled>📷 이미지 촬영</button>
+        <div class="vision-actions" aria-label="비전 서버 작업">
+          <button id="capture-image" class="vision-primary" type="button" disabled>↓ 라즈베리파이 사진 불러오기</button>
+          <button id="vision-refresh" class="secondary" type="button" disabled>↻ 목록 새로고침</button>
+          <button id="vision-delete-selected" class="vision-danger" type="button" disabled>선택 삭제</button>
+          <button id="vision-delete-local" class="secondary" type="button" disabled>Pi 전송본 정리</button>
+          <button id="vision-capture" type="button" disabled title="비전 서버에 단발 촬영 API가 추가되면 연결됩니다.">📷 촬영</button>
+          <button id="vision-send-analysis" type="button" disabled title="LLM 분석 서버 API 주소와 요청 형식이 필요합니다.">분석팀 전송</button>
+        </div>
+        <div class="vision-selection-bar">
+          <label><input id="vision-select-all" type="checkbox" disabled> 전체 선택</label>
+          <span>비전 서버에 수신된 이미지</span>
+        </div>
+        <div id="vision-image-grid" class="vision-image-grid" aria-live="polite"></div>
+        <div id="camera-placeholder" class="vision-empty">
+          <span aria-hidden="true">🖼️</span>
+          <strong>수신된 이미지가 없습니다</strong>
+          <p>비전 서버 연결 후 라즈베리파이 사진 불러오기를 실행하세요.</p>
+        </div>
         <p id="capture-result" class="notice" role="status"></p>
       </article>
 

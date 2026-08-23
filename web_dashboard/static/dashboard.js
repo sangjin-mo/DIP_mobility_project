@@ -5,6 +5,7 @@ let controlReachable = false;
 let controlBusy = false;
 let roverState = "UNKNOWN";
 let visionCaptureConfigured = false;
+let visionImages = [];
 let driveHeartbeatActive = false;
 let driveHeartbeatTimer = null;
 let weatherRefreshTimer = null;
@@ -13,7 +14,7 @@ const dashboardSlides = [...document.querySelectorAll("[data-dashboard-slide]")]
 const dashboardHome = byId("dashboard-home");
 const dashboardWorkspace = byId("dashboard-workspace");
 const dashboardMenuButtons = [...document.querySelectorAll("[data-dashboard-target]")];
-const workspaceTitles = ["카메라 촬영", "기상 정보", "작물 상태 및 레포트", "차량 제어"];
+const workspaceTitles = ["비전 이미지 관리", "기상 정보", "작물 상태 및 레포트", "차량 제어"];
 let currentSlideIndex = 0;
 
 const weatherIcons = {
@@ -66,15 +67,15 @@ async function loadControlStatus() {
     scheduleWeatherRefresh(Number(status.weather_refresh_interval_s ?? 1800));
 
     const cameraStatus = byId("camera-status");
-    cameraStatus.textContent = status.camera_configured ? "촬영 API 연결" : "미연결";
-    cameraStatus.className = `status-pill ${status.camera_configured ? "success" : "neutral"}`;
-    byId("capture-image").disabled = !status.camera_configured;
-    byId("capture-result").textContent = status.camera_configured
-      ? visionCaptureConfigured
-        ? "촬영 버튼을 누르면 웹캠 Pi의 최신 정지 이미지를 전송받습니다."
-        : "촬영 버튼을 누르면 설정된 정지 이미지를 다시 불러옵니다."
-      : "";
-    if (visionCaptureConfigured) loadLatestStillImage();
+    cameraStatus.textContent = visionCaptureConfigured ? "VIS 연결 설정" : "미연결";
+    cameraStatus.className = `status-pill ${visionCaptureConfigured ? "success" : "neutral"}`;
+    ["capture-image", "vision-refresh", "vision-delete-local"].forEach((id) => {
+      byId(id).disabled = !visionCaptureConfigured;
+    });
+    byId("capture-result").textContent = visionCaptureConfigured
+      ? "비전 서버 연결을 확인하고 있습니다."
+      : "DASHBOARD_VISION_SERVER_URL 설정이 필요합니다.";
+    if (visionCaptureConfigured) loadVisionImages();
 
     if (controlConfigured) {
       await loadRoverStatus();
@@ -435,53 +436,129 @@ async function sendDriveHeartbeat() {
   }
 }
 
-function showStillImage(url) {
-  const image = byId("camera-image");
-  const refreshedUrl = new URL(url, window.location.href);
-  refreshedUrl.searchParams.set("captured_at", Date.now());
-  image.src = refreshedUrl.toString();
-  byId("camera-still").hidden = false;
-  byId("camera-placeholder").hidden = true;
+function selectedVisionPaths() {
+  return [...document.querySelectorAll(".vision-image-checkbox:checked")].map((input) => input.value);
 }
 
-async function loadLatestStillImage() {
+function updateVisionSelection() {
+  const selected = selectedVisionPaths();
+  byId("vision-selected-count").textContent = `${selected.length}장`;
+  byId("vision-delete-selected").disabled = !visionCaptureConfigured || selected.length === 0;
+  const selectAll = byId("vision-select-all");
+  selectAll.disabled = visionImages.length === 0;
+  selectAll.checked = visionImages.length > 0 && selected.length === visionImages.length;
+  selectAll.indeterminate = selected.length > 0 && selected.length < visionImages.length;
+}
+
+function renderVisionImages(images) {
+  visionImages = Array.isArray(images) ? images : [];
+  const grid = byId("vision-image-grid");
+  grid.replaceChildren();
+  byId("vision-image-count").textContent = `${visionImages.length}장`;
+  byId("camera-placeholder").hidden = visionImages.length > 0;
+  visionImages.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "vision-image-card";
+    const image = document.createElement("img");
+    image.src = item.image_url;
+    image.alt = item.filename || "비전 촬영 이미지";
+    image.loading = "lazy";
+    const meta = document.createElement("label");
+    meta.className = "vision-image-meta";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "vision-image-checkbox";
+    checkbox.value = item.rel_path;
+    checkbox.addEventListener("change", updateVisionSelection);
+    const copy = document.createElement("span");
+    const filename = document.createElement("strong");
+    filename.textContent = item.filename || "파일명 없음";
+    const day = document.createElement("small");
+    day.textContent = item.day || "날짜 정보 없음";
+    copy.append(filename, day);
+    meta.append(checkbox, copy);
+    card.append(image, meta);
+    grid.append(card);
+  });
+  updateVisionSelection();
+}
+
+async function loadVisionImages(message = true) {
   try {
-    const response = await fetch("/api/camera/latest");
+    const response = await fetch("/api/vision/images");
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
-    if (result.available) {
-      showStillImage(result.image.image_url);
-      byId("capture-result").textContent = `최근 전송 이미지: ${result.image.filename || "파일명 없음"}`;
-    }
+    renderVisionImages(result.images);
+    byId("camera-status").textContent = "VIS 연결됨";
+    byId("camera-status").className = "status-pill success";
+    if (message) byId("capture-result").textContent = `${result.count}장의 수신 이미지를 불러왔습니다.`;
   } catch (error) {
-    byId("capture-result").textContent = `최근 이미지 확인 실패: ${error.message}`;
+    byId("camera-status").textContent = "연결 실패";
+    byId("camera-status").className = "status-pill neutral";
+    byId("capture-result").textContent = `이미지 목록 조회 실패: ${error.message}`;
   }
 }
 
-async function refreshStillImage() {
+async function transferVisionImages() {
   const button = byId("capture-image");
   button.disabled = true;
-  byId("capture-result").textContent = "웹캠 이미지 전송을 요청하고 있습니다.";
+  byId("capture-result").textContent = "라즈베리파이의 미전송 촬영본을 가져오고 있습니다.";
   try {
-    if (!visionCaptureConfigured) {
-      const image = byId("camera-image");
-      if (!image.src) throw new Error("촬영 API가 설정되지 않았습니다.");
-      showStillImage(image.src);
-      byId("capture-result").textContent = "최신 정지 이미지를 다시 불러왔습니다.";
-      return;
-    }
-    const response = await fetch("/api/camera/capture", { method: "POST" });
+    const response = await fetch("/api/vision/transfer", { method: "POST" });
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
-    showStillImage(result.image.image_url);
-    const transfer = result.image.transfer || {};
-    byId("capture-result").textContent = transfer.requested === 0
-      ? `새 전송 대상이 없어 기존 최신 이미지를 표시합니다: ${result.image.filename || "파일명 없음"}`
-      : `촬영 이미지 수신 완료: ${result.image.filename || "파일명 없음"}`;
+    renderVisionImages(result.images);
+    const transfer = result.transfer || {};
+    byId("capture-result").textContent = `전송 요청 ${transfer.requested ?? 0}장 · 성공 ${transfer.success ?? 0}장 · 실패 ${transfer.failed ?? 0}장`;
   } catch (error) {
-    byId("capture-result").textContent = `촬영 실패: ${error.message}`;
+    byId("capture-result").textContent = `사진 가져오기 실패: ${error.message}`;
   } finally {
-    button.disabled = false;
+    button.disabled = !visionCaptureConfigured;
+  }
+}
+
+async function deleteSelectedVisionImages() {
+  const paths = selectedVisionPaths();
+  if (!paths.length) return;
+  byId("vision-delete-selected").disabled = true;
+  byId("capture-result").textContent = `선택한 ${paths.length}장을 삭제하고 있습니다.`;
+  try {
+    const response = await fetch("/api/vision/images/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    await loadVisionImages(false);
+    const deletedCount = Array.isArray(result.deleted) ? result.deleted.length : Number(result.deleted ?? paths.length);
+    const rejectedCount = Array.isArray(result.rejected) ? result.rejected.length : 0;
+    byId("capture-result").textContent = rejectedCount
+      ? `PC 수신본 ${deletedCount}장 삭제 · ${rejectedCount}장 거부`
+      : `${deletedCount}장의 PC 수신본을 삭제했습니다.`;
+  } catch (error) {
+    byId("capture-result").textContent = `이미지 삭제 실패: ${error.message}`;
+    updateVisionSelection();
+  }
+}
+
+async function deleteLocalVisionImages() {
+  const button = byId("vision-delete-local");
+  button.disabled = true;
+  byId("capture-result").textContent = "라즈베리파이의 업로드 완료 촬영본을 정리하고 있습니다.";
+  try {
+    const response = await fetch("/api/vision/local/delete-all", { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+    const deletedCount = Array.isArray(result.deleted) ? result.deleted.length : Number(result.deleted ?? 0);
+    const pendingCount = Number(result.pending_kept ?? 0);
+    byId("capture-result").textContent = pendingCount
+      ? `라즈베리파이 저장소 ${deletedCount}장 정리 · 미전송 ${pendingCount}장 보존`
+      : `라즈베리파이 저장소 정리 완료: ${deletedCount}장`;
+  } catch (error) {
+    byId("capture-result").textContent = `라즈베리파이 저장소 정리 실패: ${error.message}`;
+  } finally {
+    button.disabled = !visionCaptureConfigured;
   }
 }
 
@@ -666,7 +743,16 @@ function toggleWorkAction(button) {
 }
 
 byId("refresh-weather").addEventListener("click", () => loadWeather(true));
-byId("capture-image").addEventListener("click", refreshStillImage);
+byId("capture-image").addEventListener("click", transferVisionImages);
+byId("vision-refresh").addEventListener("click", () => loadVisionImages());
+byId("vision-delete-selected").addEventListener("click", deleteSelectedVisionImages);
+byId("vision-delete-local").addEventListener("click", deleteLocalVisionImages);
+byId("vision-select-all").addEventListener("change", (event) => {
+  document.querySelectorAll(".vision-image-checkbox").forEach((input) => {
+    input.checked = event.target.checked;
+  });
+  updateVisionSelection();
+});
 byId("refresh-report").addEventListener("click", generateCropReport);
 byId("report-history").addEventListener("change", (event) => loadCropReport(event.target.value));
 byId("target-speed").addEventListener("input", (event) => {

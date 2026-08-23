@@ -15,12 +15,13 @@ DEBOUNCE_N = 3  # TODO: 연속 탐지 몇 프레임이면 HIGH로 확정할지, 
 DEBOUNCE_M = 5  # TODO: 연속 미탐지 몇 프레임이면 LOW로 확정할지, 실측 후 조정
 
 # --- 쿨다운 (재정지 방지, §3-1) ---
-# HIGH를 보낸 시점부터 이 시간 동안은 같은 표지판이 계속 잡혀도 재신호를 보내지 않음.
+# STOP 요청을 보낸 시점부터 이 시간 동안은 같은 표지판이 계속 잡혀도 재신호를 보내지 않음.
 # "정지 → 재출발 → 표지판을 완전히 벗어남"까지 걸리는 시간보다 넉넉해야 함 — 아직 실측 전.
 COOLDOWN_SECONDS = 5.0  # TODO: 실측 후 조정
 
-# --- GPIO (§3) ---
-GPIO_OUT_PIN = 17  # TODO: 실제 배선 시 핀 번호 확정 (BCM 번호 기준, gpiozero 사용)
+# GPIO 핀 직결은 점퍼케이블 연결이 물리적으로 불가능해져 폐기 — 정지 신호는
+# vehicle_control_client.py를 통해 1호기에 HTTP로 직접 전송함
+# (../../../mediapipe/design/README.md §3-1 참고. URL/토큰 설정은 그쪽 gesture_config.py에 있음)
 
 # --- 주행 상태 API (§3-2) ---
 # PC 제어 서버가 POST {API_HOST}:{API_PORT}/vehicle-state 로 주행 상태를 푸시

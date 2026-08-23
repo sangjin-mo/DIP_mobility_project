@@ -2,7 +2,7 @@
 
 The webcam Pi and VIS server remain owned by the vision team.  This adapter
 uses only their published HTTP endpoints: request a pending-image transfer,
-list received images, and proxy the newest JPEG to the browser.
+list/delete received images, clean uploaded Pi images, and proxy JPEGs.
 """
 
 from __future__ import annotations
@@ -62,6 +62,55 @@ class VisionCaptureService:
         }
         return latest
 
+    def images(self) -> list[dict]:
+        """Return every received VIS image using dashboard-owned proxy URLs."""
+        payload = self._request_json("/images")
+        images = payload.get("images")
+        if not isinstance(images, list):
+            raise VisionResponseError("비전 서버의 이미지 목록 형식이 올바르지 않습니다.")
+        result = []
+        for item in images:
+            if not isinstance(item, dict):
+                raise VisionResponseError("비전 서버의 이미지 정보가 올바르지 않습니다.")
+            rel_path = item.get("rel_path")
+            if not isinstance(rel_path, str) or not isinstance(item.get("url"), str):
+                raise VisionResponseError("비전 서버의 이미지 경로가 올바르지 않습니다.")
+            result.append(
+                {
+                    "filename": item.get("filename"),
+                    "day": item.get("day"),
+                    "rel_path": rel_path,
+                    "image_url": "/api/vision/image?path=" + urllib.parse.quote(rel_path),
+                }
+            )
+        return result
+
+    def transfer(self) -> dict:
+        """Request the VIS server to pull all pending Pi captures."""
+        return self._request_json("/control/request-transfer", method="POST")
+
+    def delete_received(self, paths: list[str]) -> dict:
+        """Delete selected copies from the VIS PC received store."""
+        return self._request_json("/images/delete", method="POST", payload={"paths": paths})
+
+    def delete_all_local(self) -> dict:
+        """Delete only upload-confirmed images from the webcam Raspberry Pi."""
+        return self._request_json("/control/delete-all-local", method="POST")
+
+    def image(self, rel_path: str) -> tuple[bytes, str]:
+        """Proxy one selected image after resolving it from VIS's own list."""
+        item = next(
+            (
+                item
+                for item in self._raw_images()
+                if isinstance(item, dict) and item.get("rel_path") == rel_path
+            ),
+            None,
+        )
+        if item is None or not isinstance(item.get("url"), str):
+            raise VisionResponseError("비전 서버에서 선택한 이미지를 찾을 수 없습니다.")
+        return self._read_image(item["url"])
+
     def latest(self) -> dict | None:
         item = self._latest_item()
         if item is None:
@@ -74,10 +123,7 @@ class VisionCaptureService:
         }
 
     def _latest_item(self) -> dict | None:
-        payload = self._request_json("/images")
-        images = payload.get("images")
-        if not isinstance(images, list):
-            raise VisionResponseError("비전 서버의 이미지 목록 형식이 올바르지 않습니다.")
+        images = self._raw_images()
         if not images:
             return None
         item = images[0]
@@ -89,7 +135,17 @@ class VisionCaptureService:
         item = self._latest_item()
         if item is None:
             raise VisionResponseError("비전 서버에 표시할 이미지가 없습니다.")
-        image_url = self._same_origin_url(item["url"])
+        return self._read_image(item["url"])
+
+    def _raw_images(self) -> list[dict]:
+        payload = self._request_json("/images")
+        images = payload.get("images")
+        if not isinstance(images, list):
+            raise VisionResponseError("비전 서버의 이미지 목록 형식이 올바르지 않습니다.")
+        return images
+
+    def _read_image(self, url: str) -> tuple[bytes, str]:
+        image_url = self._same_origin_url(url)
         request = urllib.request.Request(image_url, method="GET")
         try:
             with urllib.request.urlopen(request, timeout=self._timeout_s) as response:
@@ -107,12 +163,22 @@ class VisionCaptureService:
             raise VisionResponseError("비전 서버가 이미지가 아닌 응답을 반환했습니다.")
         return data, content_type
 
-    def _request_json(self, path: str, *, method: str = "GET") -> dict:
+    def _request_json(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+    ) -> dict:
         if not self._server_url:
             raise VisionUnavailableError(
                 "비전 서버가 설정되지 않았습니다. DASHBOARD_VISION_SERVER_URL을 설정하세요."
             )
-        request = urllib.request.Request(f"{self._server_url}{path}", method=method)
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json"} if data is not None else {}
+        request = urllib.request.Request(
+            f"{self._server_url}{path}", data=data, headers=headers, method=method
+        )
         try:
             with urllib.request.urlopen(request, timeout=self._timeout_s) as response:
                 raw = response.read().decode("utf-8")
