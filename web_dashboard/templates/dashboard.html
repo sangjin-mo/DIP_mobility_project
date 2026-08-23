@@ -19,8 +19,47 @@
   </header>
 
   <main class="dashboard-shell">
+    <section id="dashboard-home" class="dashboard-home" aria-labelledby="dashboard-home-title">
+      <div class="home-intro">
+        <p class="section-kicker">SMART FARM CONTROL CENTER</p>
+        <h2 id="dashboard-home-title">관리할 기능을 선택하세요</h2>
+        <p>필요한 항목을 선택하면 해당 관리 화면으로 바로 이동합니다.</p>
+      </div>
+      <nav class="feature-menu" aria-label="대시보드 기능 선택">
+        <button class="feature-menu-card" type="button" data-dashboard-target="0">
+          <span class="feature-number">01</span>
+          <span class="feature-icon" aria-hidden="true">📷</span>
+          <span class="feature-copy"><strong>카메라 촬영</strong><small>웹캠 정지 이미지 촬영 및 확인</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+        <button class="feature-menu-card" type="button" data-dashboard-target="1">
+          <span class="feature-number">02</span>
+          <span class="feature-icon" aria-hidden="true">☀️</span>
+          <span class="feature-copy"><strong>기상 정보</strong><small>현재 날씨와 24시간 관측 그래프</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+        <button class="feature-menu-card" type="button" data-dashboard-target="2">
+          <span class="feature-number">03</span>
+          <span class="feature-icon" aria-hidden="true">🌿</span>
+          <span class="feature-copy"><strong>작물 상태 및 레포트</strong><small>구역별 분석 결과와 LLM 레포트</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+        <button class="feature-menu-card" type="button" data-dashboard-target="3">
+          <span class="feature-number">04</span>
+          <span class="feature-icon" aria-hidden="true">🚜</span>
+          <span class="feature-copy"><strong>차량 제어</strong><small>목표 속도 설정과 운행·정지 제어</small></span>
+          <span class="feature-enter" aria-hidden="true">→</span>
+        </button>
+      </nav>
+    </section>
+
+    <section id="dashboard-workspace" class="dashboard-workspace" hidden>
+      <nav class="workspace-navigation" aria-label="기능 화면 탐색">
+        <button id="dashboard-home-button" class="home-button" type="button">← 전체 메뉴</button>
+        <strong id="workspace-title">카메라 촬영</strong>
+      </nav>
     <section class="dashboard-grid">
-      <article class="panel camera-panel dashboard-slide is-active" data-dashboard-slide aria-label="1 / 4 카메라 촬영">
+      <article class="panel camera-panel dashboard-slide" data-dashboard-slide aria-label="1 / 4 카메라 촬영" hidden>
         <div class="panel-heading">
           <div><p class="section-kicker">01 · CAMERA</p><h2>카메라 촬영</h2></div>
           <span id="camera-status" class="status-pill neutral">미연결</span>
@@ -77,13 +116,18 @@
       <article class="panel crop-report-panel dashboard-slide" data-dashboard-slide aria-label="3 / 4 작물 상태 레포트" hidden>
         <div class="panel-heading">
           <div><p class="section-kicker">03 · CROP REPORT</p><h2>구역별 작물 상태 레포트</h2></div>
-          <div class="report-heading-actions"><span id="crop-report-status" class="status-pill neutral">레포트 확인 중</span><button id="refresh-report" class="secondary" type="button">↻ 새로고침</button></div>
+          <div class="report-heading-actions">
+            <label class="report-history-label" for="report-history">저장 기록</label>
+            <select id="report-history" aria-label="과거 레포트 선택"><option value="">최신 레포트</option></select>
+            <span id="crop-report-status" class="status-pill neutral">레포트 확인 중</span>
+            <button id="refresh-report" class="secondary" type="button">＋ 레포트 생성</button>
+          </div>
         </div>
         <div id="crop-grid" class="crop-grid">
           <article class="crop-card"><div class="crop-title"><strong>A구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
           <article class="crop-card"><div class="crop-title"><strong>B구역 작물 레포트</strong><span class="crop-state pending">분석 대기</span></div></article>
         </div>
-        <div class="llm-report-wrap"><div class="llm-report-title"><strong>LLM 종합 레포트</strong><span id="report-generated-at">—</span></div><pre id="llm-report">생성된 레포트가 없습니다.</pre></div>
+        <div class="llm-report-wrap"><div class="llm-report-title"><strong>LLM 종합 레포트</strong><span id="report-generated-at">-</span></div><div id="llm-report" class="report-reader">생성된 레포트가 없습니다.</div></div>
       </article>
 
       <article class="panel controls-panel dashboard-slide" data-dashboard-slide aria-label="4 / 4 차량 제어" hidden>
@@ -118,11 +162,7 @@
         </section>
       </article>
     </section>
-    <nav class="carousel-controls" aria-label="대시보드 화면 이동">
-      <button id="previous-slide" class="carousel-arrow" type="button" aria-label="이전 화면">‹</button>
-      <strong class="carousel-position"><span id="current-slide">1</span> / <span id="total-slides">4</span></strong>
-      <button id="next-slide" class="carousel-arrow" type="button" aria-label="다음 화면">›</button>
-    </nav>
+    </section>
   </main>
   <script src="/static/dashboard.js" defer></script>
 </body>

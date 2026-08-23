@@ -10,6 +10,10 @@ let driveHeartbeatTimer = null;
 let weatherRefreshTimer = null;
 let weatherRefreshIntervalSeconds = 1800;
 const dashboardSlides = [...document.querySelectorAll("[data-dashboard-slide]")];
+const dashboardHome = byId("dashboard-home");
+const dashboardWorkspace = byId("dashboard-workspace");
+const dashboardMenuButtons = [...document.querySelectorAll("[data-dashboard-target]")];
+const workspaceTitles = ["카메라 촬영", "기상 정보", "작물 상태 및 레포트", "차량 제어"];
 let currentSlideIndex = 0;
 
 const weatherIcons = {
@@ -490,69 +494,170 @@ function observationSummary(observations) {
   return rows.join(" · ") || "관측 데이터 없음";
 }
 
-async function loadCropReport() {
-  const button = byId("refresh-report");
-  const status = byId("crop-report-status");
-  button.disabled = true;
-  status.textContent = "불러오는 중";
-  try {
-    const response = await fetch("/api/crop-report/latest");
-    const report = await response.json();
-    if (!response.ok) throw new Error(report.detail || `HTTP ${response.status}`);
-    const grid = byId("crop-grid");
-    grid.replaceChildren();
-    if (!report.available) {
-      const empty = document.createElement("article");
-      empty.className = "crop-card crop-empty";
-      empty.textContent = "AI/LLM 파이프라인에서 생성된 레포트가 없습니다.";
-      grid.appendChild(empty);
-      byId("llm-report").textContent = "생성된 레포트가 없습니다.";
-      byId("report-generated-at").textContent = "—";
-      status.textContent = "레포트 없음";
-      status.className = "status-pill neutral";
-      return;
+function appendInlineMarkdown(parent, text) {
+  String(text).split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).filter(Boolean).forEach((token) => {
+    let element = null;
+    let value = token;
+    if (token.startsWith("**") && token.endsWith("**")) {
+      element = document.createElement("strong"); value = token.slice(2, -2);
+    } else if (token.startsWith("`") && token.endsWith("`")) {
+      element = document.createElement("code"); value = token.slice(1, -1);
+    } else if (token.startsWith("*") && token.endsWith("*")) {
+      element = document.createElement("em"); value = token.slice(1, -1);
     }
-    report.zones.forEach((zone) => {
-      const card = document.createElement("article");
-      card.className = "crop-card";
-      const title = document.createElement("div");
-      title.className = "crop-title";
-      const name = document.createElement("strong");
-      name.textContent = `${zone.label}구역 · ${zone.zone_name || `구역 ${zone.zone_id}`}`;
-      const state = document.createElement("span");
-      state.className = "crop-state";
-      state.textContent = zone.status || "판정 전";
-      title.append(name, state);
-      const summary = document.createElement("p");
-      summary.className = "crop-observations";
-      summary.textContent = observationSummary(zone.observations);
-      card.append(title, summary);
-      grid.appendChild(card);
-    });
-    byId("llm-report").textContent = report.report_markdown || "레포트 본문이 없습니다.";
-    byId("report-generated-at").textContent = report.generated_at
-      ? new Date(report.generated_at).toLocaleString("ko-KR") : report.patrol_id;
-    status.textContent = report.llm_enabled ? "LLM 레포트" : "규칙 기반 레포트";
-    status.className = "status-pill success";
-  } catch (error) {
-    status.textContent = "조회 실패";
-    status.className = "status-pill neutral";
-    byId("llm-report").textContent = `레포트 조회 실패: ${error.message}`;
-  } finally {
-    button.disabled = false;
+    if (element) { element.textContent = value; parent.appendChild(element); }
+    else parent.appendChild(document.createTextNode(value));
+  });
+}
+
+function markdownCells(line) {
+  return line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+}
+
+function renderReportMarkdown(markdown) {
+  const reader = byId("llm-report");
+  reader.replaceChildren();
+  if (!markdown) { reader.textContent = "생성된 레포트가 없습니다."; return; }
+  const lines = String(markdown).replace(/\r/g, "").split("\n");
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index].trim();
+    if (!line) { index += 1; continue; }
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      const node = document.createElement(`h${Math.min(heading[1].length + 1, 4)}`);
+      appendInlineMarkdown(node, heading[2]); reader.appendChild(node); index += 1; continue;
+    }
+    const nextLine = lines[index + 1] ? lines[index + 1].trim() : "";
+    if (line.includes("|") && /^\|?\s*:?-{3,}/.test(nextLine)) {
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      markdownCells(line).forEach((cell) => {
+        const th = document.createElement("th"); appendInlineMarkdown(th, cell); headRow.appendChild(th);
+      });
+      thead.appendChild(headRow); table.appendChild(thead);
+      const tbody = document.createElement("tbody"); index += 2;
+      while (index < lines.length && lines[index].includes("|")) {
+        const row = document.createElement("tr");
+        markdownCells(lines[index]).forEach((cell) => {
+          const td = document.createElement("td"); appendInlineMarkdown(td, cell); row.appendChild(td);
+        });
+        tbody.appendChild(row); index += 1;
+      }
+      table.appendChild(tbody); reader.appendChild(table); continue;
+    }
+    const listMatch = line.match(/^([-*]|\d+\.)\s+(.+)$/);
+    if (listMatch) {
+      const ordered = /\d+\./.test(listMatch[1]);
+      const list = document.createElement(ordered ? "ol" : "ul");
+      while (index < lines.length) {
+        const item = lines[index].trim().match(/^([-*]|\d+\.)\s+(.+)$/);
+        if (!item || /\d+\./.test(item[1]) !== ordered) break;
+        const li = document.createElement("li"); appendInlineMarkdown(li, item[2]); list.appendChild(li);
+        index += 1;
+      }
+      reader.appendChild(list); continue;
+    }
+    const node = document.createElement(line.startsWith(">") ? "blockquote" : "p");
+    appendInlineMarkdown(node, line.replace(/^>\s?/, "")); reader.appendChild(node); index += 1;
   }
 }
 
+function renderCropReport(report) {
+  const status = byId("crop-report-status");
+  const grid = byId("crop-grid");
+  grid.replaceChildren();
+  if (!report.available) {
+    const empty = document.createElement("article");
+    empty.className = "crop-card crop-empty";
+    empty.textContent = "AI/LLM 파이프라인에서 생성된 레포트가 없습니다.";
+    grid.appendChild(empty); renderReportMarkdown(null);
+    byId("report-generated-at").textContent = "-";
+    status.textContent = "레포트 없음"; status.className = "status-pill neutral"; return;
+  }
+  report.zones.forEach((zone) => {
+    const card = document.createElement("article"); card.className = "crop-card";
+    const title = document.createElement("div"); title.className = "crop-title";
+    const name = document.createElement("strong");
+    name.textContent = `${zone.label}구역 · ${zone.zone_name || `구역 ${zone.zone_id}`}`;
+    const state = document.createElement("span"); state.className = "crop-state";
+    state.textContent = zone.status || "판정 없음"; title.append(name, state);
+    const summary = document.createElement("p"); summary.className = "crop-observations";
+    summary.textContent = observationSummary(zone.observations); card.append(title, summary); grid.appendChild(card);
+  });
+  renderReportMarkdown(report.report_markdown);
+  byId("report-generated-at").textContent = report.generated_at
+    ? new Date(report.generated_at).toLocaleString("ko-KR") : report.patrol_id;
+  status.textContent = report.llm_enabled ? "LLM 레포트" : "규칙 기반 레포트";
+  status.className = "status-pill success";
+}
+
+async function loadCropReport(patrolId = null) {
+  const status = byId("crop-report-status"); status.textContent = "불러오는 중";
+  try {
+    const url = patrolId ? `/api/crop-report/${encodeURIComponent(patrolId)}` : "/api/crop-report/latest";
+    const response = await fetch(url); const report = await response.json();
+    if (!response.ok) throw new Error(report.detail || `HTTP ${response.status}`);
+    renderCropReport(report);
+  } catch (error) {
+    status.textContent = "조회 실패"; status.className = "status-pill neutral";
+    renderReportMarkdown(`## 레포트 조회 실패\n${error.message}`);
+  }
+}
+
+async function loadReportHistory(selectedPatrolId = null) {
+  const select = byId("report-history");
+  try {
+    const response = await fetch("/api/patrols"); const reports = await response.json();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    select.replaceChildren();
+    reports.forEach((report, index) => {
+      const option = document.createElement("option"); option.value = report.patrol_id;
+      const date = report.generated_at ? new Date(report.generated_at).toLocaleString("ko-KR") : report.patrol_id;
+      option.textContent = `${index === 0 ? "최신 · " : ""}${date}`;
+      option.selected = report.patrol_id === selectedPatrolId; select.appendChild(option);
+    });
+    select.disabled = reports.length === 0;
+  } catch (_) { select.disabled = true; }
+}
+
+async function generateCropReport() {
+  const button = byId("refresh-report"); const status = byId("crop-report-status");
+  button.disabled = true; status.textContent = "레포트 생성 중"; status.className = "status-pill neutral";
+  try {
+    const response = await fetch("/api/crop-report/generate", { method: "POST" });
+    const report = await response.json();
+    if (!response.ok) throw new Error(report.detail || `HTTP ${response.status}`);
+    renderCropReport(report); await loadReportHistory(report.patrol_id);
+  } catch (error) {
+    status.textContent = "생성 실패"; status.className = "status-pill neutral";
+    renderReportMarkdown(`## 레포트 생성 실패\n${error.message}`);
+  } finally { button.disabled = false; }
+}
+
 function showDashboardSlide(index) {
-  currentSlideIndex = (index + dashboardSlides.length) % dashboardSlides.length;
+  currentSlideIndex = Math.min(Math.max(index, 0), dashboardSlides.length - 1);
+  dashboardHome.hidden = true;
+  dashboardWorkspace.hidden = false;
   dashboardSlides.forEach((slide, slideIndex) => {
     const isActive = slideIndex === currentSlideIndex;
     slide.hidden = !isActive;
     slide.classList.toggle("is-active", isActive);
     slide.setAttribute("aria-hidden", String(!isActive));
   });
-  byId("current-slide").textContent = String(currentSlideIndex + 1);
-  byId("total-slides").textContent = String(dashboardSlides.length);
+  byId("workspace-title").textContent = workspaceTitles[currentSlideIndex];
+  dashboardWorkspace.scrollIntoView({ block: "start" });
+}
+
+function showDashboardHome() {
+  dashboardHome.hidden = false;
+  dashboardWorkspace.hidden = true;
+  dashboardSlides.forEach((slide) => {
+    slide.hidden = true;
+    slide.classList.remove("is-active");
+    slide.setAttribute("aria-hidden", "true");
+  });
+  dashboardHome.scrollIntoView({ block: "start" });
 }
 
 function toggleWorkAction(button) {
@@ -562,7 +667,8 @@ function toggleWorkAction(button) {
 
 byId("refresh-weather").addEventListener("click", () => loadWeather(true));
 byId("capture-image").addEventListener("click", refreshStillImage);
-byId("refresh-report").addEventListener("click", loadCropReport);
+byId("refresh-report").addEventListener("click", generateCropReport);
+byId("report-history").addEventListener("change", (event) => loadCropReport(event.target.value));
 byId("target-speed").addEventListener("input", (event) => {
   byId("target-speed-value").textContent = Number(event.target.value).toFixed(2);
 });
@@ -571,17 +677,19 @@ byId("target-speed").addEventListener("change", () => {
 });
 byId("start-drive").addEventListener("click", () => sendControl("start"));
 byId("stop-drive").addEventListener("click", () => sendControl("stop"));
-byId("previous-slide").addEventListener("click", () => showDashboardSlide(currentSlideIndex - 1));
-byId("next-slide").addEventListener("click", () => showDashboardSlide(currentSlideIndex + 1));
+dashboardMenuButtons.forEach((button) => {
+  button.addEventListener("click", () => showDashboardSlide(Number(button.dataset.dashboardTarget)));
+});
+byId("dashboard-home-button").addEventListener("click", showDashboardHome);
 document.querySelectorAll(".work-toggle").forEach((button) => {
   button.addEventListener("click", () => toggleWorkAction(button));
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "ArrowLeft") showDashboardSlide(currentSlideIndex - 1);
-  if (event.key === "ArrowRight") showDashboardSlide(currentSlideIndex + 1);
+  if (event.key === "Escape" && !dashboardWorkspace.hidden) showDashboardHome();
 });
-showDashboardSlide(0);
+showDashboardHome();
 loadControlStatus();
 loadWeather();
 loadCropReport();
+loadReportHistory();
 setInterval(loadRoverStatus, 2000);

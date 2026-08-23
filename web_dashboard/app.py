@@ -189,6 +189,27 @@ def create_app(
     async def latest_crop_report() -> dict:
         return await asyncio.to_thread(crop_reports.latest)
 
+    @app.get("/api/crop-report/{patrol_id}")
+    async def crop_report(patrol_id: str) -> dict:
+        return await _service_call(crop_reports.get, patrol_id)
+
+    @app.post("/api/crop-report/generate")
+    async def generate_crop_report() -> dict:
+        available = await asyncio.to_thread(reports.list_reports)
+        if not available:
+            raise HTTPException(status_code=409, detail="생성할 순찰 기록이 없습니다.")
+        patrol_id = available[0]["patrol_id"]
+        try:
+            from ai_report.cli import _regenerate
+
+            await _regenerate(patrol_id, ai_config.REPORT_ROOT)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="저장된 payload.json이 없어 레포트를 다시 생성할 수 없습니다.",
+            ) from exc
+        return await asyncio.to_thread(crop_reports.get, patrol_id)
+
     @app.get("/api/patrols")
     async def patrols() -> list[dict]:
         return await asyncio.to_thread(reports.list_reports)

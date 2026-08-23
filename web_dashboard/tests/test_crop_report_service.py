@@ -54,6 +54,10 @@ def test_latest_crop_report_combines_metadata_and_llm_markdown(tmp_path):
     assert result["zones"][0]["zone_name"] == "토마토"
     assert result["report_markdown"] == "# LLM 작물 레포트"
 
+    selected = CropReportService(ReportService(tmp_path)).get(patrol_id)
+    assert selected["patrol_id"] == patrol_id
+    assert selected["report_markdown"] == "# LLM 작물 레포트"
+
 
 def test_latest_crop_report_has_explicit_empty_state(tmp_path):
     result = CropReportService(ReportService(tmp_path)).latest()

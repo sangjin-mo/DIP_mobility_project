@@ -74,10 +74,10 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
         "toggle-harvest",
         "toggle-pest-control",
         "toggle-watering",
-        "previous-slide",
-        "current-slide",
-        "total-slides",
-        "next-slide",
+        "dashboard-home",
+        "dashboard-workspace",
+        "dashboard-home-button",
+        "workspace-title",
         "weather-temperature",
         "weather-rain-probability",
         "rain-advice",
@@ -86,6 +86,7 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
         "temperature-chart",
         "precipitation-chart",
         "refresh-report",
+        "report-history",
         "crop-report-status",
         "llm-report",
     ):
@@ -96,6 +97,10 @@ def test_dashboard_four_section_layout_keeps_existing_feature_hooks(tmp_path):
     assert "A구역 작물 레포트" in html
     assert "B구역 작물 레포트" in html
     assert html.count("data-dashboard-slide") == 4
+    assert html.count("data-dashboard-target") == 4
+    assert "관리할 기능을 선택하세요" in html
+    assert "＋ 레포트 생성" in html
+    assert '<div id="llm-report" class="report-reader">' in html
     assert "1 / 4 카메라 촬영" in html
     assert "4 / 4 차량 제어" in html
     assert "지난 24시간 · 1시간 단위" in html
@@ -139,6 +144,23 @@ def test_camera_and_crop_report_adapter_routes_are_exposed(tmp_path):
     assert camera.status_code == 200
     assert camera.json()["image"]["filename"] == "crop.jpg"
     assert report.json()["available"] is False
+
+
+def test_report_generation_requires_a_saved_patrol(tmp_path):
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/crop-report/generate")
+
+    assert response.status_code == 409
+    assert "순찰 기록" in response.json()["detail"]
 
 
 def test_control_api_is_disabled_until_rover_url_is_configured(tmp_path):
