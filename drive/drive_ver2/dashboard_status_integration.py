@@ -8,7 +8,9 @@ describe the final LiDAR safety gate.
 
 from __future__ import annotations
 
+import math
 import threading
+import time
 
 try:  # Package import in tests.
     from .dashboard_control import DashboardControlPart as BaseDashboardControlPart
@@ -78,6 +80,117 @@ class RoverSafetyStatus:
 
 
 SAFETY_STATUS = RoverSafetyStatus()
+
+
+def classify_lidar_scan(
+    points,
+    stop_distance_m: float,
+    forward_center_rad: float,
+    forward_half_angle_rad: float,
+) -> tuple[bool, bool, float | None]:
+    """Classify one successful scan without treating open space as a fault.
+
+    A healthy 360-degree scan may contain no return inside the narrow forward
+    sector when there is simply nothing in range.  The original drive part
+    counted only forward points and therefore fail-safe stopped in that case.
+    We fail safe only when the *whole* scan has no usable range measurement.
+    """
+    total_valid_points = 0
+    nearest_forward = None
+    for point in points:
+        distance, angle = float(point.range), float(point.angle)
+        if not math.isfinite(distance) or distance <= 0:
+            continue
+        total_valid_points += 1
+        relative = math.atan2(
+            math.sin(angle - forward_center_rad),
+            math.cos(angle - forward_center_rad),
+        )
+        if abs(relative) <= forward_half_angle_rad:
+            nearest_forward = (
+                distance
+                if nearest_forward is None
+                else min(nearest_forward, distance)
+            )
+
+    scan_healthy = total_valid_points > 0
+    obstacle = nearest_forward is not None and nearest_forward <= stop_distance_m
+    return obstacle, scan_healthy, nearest_forward
+
+
+def corrected_lidar_worker(
+    port: str,
+    stop_distance_m: float,
+    forward_center_rad: float,
+    forward_half_angle_rad: float,
+    clear_scans_required: int,
+    fail_safe_stop: bool,
+    status_queue,
+    stop_event,
+) -> None:
+    """YDLiDAR worker with corrected open-forward-sector handling."""
+    # Import here so importing/testing the dashboard does not require the Pi SDK.
+    try:
+        from lidar_safety import _put_latest
+    except ImportError:
+        from .lidar_safety import _put_latest
+
+    laser = None
+    blocked, clear_scans = fail_safe_stop, 0
+    _put_latest(status_queue, (blocked, False, None))
+    try:
+        import ydlidar
+
+        ydlidar.os_init()
+        laser = ydlidar.CYdLidar()
+        laser.setlidaropt(ydlidar.LidarPropSerialPort, port)
+        laser.setlidaropt(ydlidar.LidarPropSerialBaudrate, 115200)
+        laser.setlidaropt(ydlidar.LidarPropLidarType, ydlidar.TYPE_TRIANGLE)
+        laser.setlidaropt(ydlidar.LidarPropDeviceType, ydlidar.YDLIDAR_TYPE_SERIAL)
+        laser.setlidaropt(ydlidar.LidarPropSampleRate, 3)
+        laser.setlidaropt(ydlidar.LidarPropScanFrequency, 6.0)
+        laser.setlidaropt(ydlidar.LidarPropSingleChannel, True)
+        laser.setlidaropt(ydlidar.LidarPropAutoReconnect, True)
+        # YDLiDAR documents the X2 usable range as 0.10 m to 8.0 m.
+        laser.setlidaropt(ydlidar.LidarPropMinRange, 0.10)
+        laser.setlidaropt(ydlidar.LidarPropMaxRange, 8.0)
+        if not laser.initialize() or not laser.turnOn():
+            raise RuntimeError("YDLiDAR X2 initialize/turnOn failed")
+
+        scan = ydlidar.LaserScan()
+        while not stop_event.is_set():
+            if not laser.doProcessSimple(scan):
+                blocked, clear_scans = fail_safe_stop, 0
+                _put_latest(status_queue, (blocked, False, None))
+                time.sleep(0.05)
+                continue
+
+            obstacle, scan_healthy, nearest = classify_lidar_scan(
+                scan.points,
+                stop_distance_m,
+                forward_center_rad,
+                forward_half_angle_rad,
+            )
+            if not scan_healthy:
+                obstacle = fail_safe_stop
+
+            if obstacle:
+                blocked, clear_scans = True, 0
+            else:
+                clear_scans += 1
+                if clear_scans >= clear_scans_required:
+                    blocked = False
+            _put_latest(status_queue, (blocked, True, nearest))
+    except Exception as exc:  # noqa: BLE001 - vendor SDK raises generic errors
+        print(f"LiDAR safety unavailable: {exc}")
+        _put_latest(status_queue, (fail_safe_stop, False, None))
+    finally:
+        if laser is not None:
+            try:
+                laser.turnOff()
+                laser.disconnecting()
+            except Exception:  # noqa: BLE001, S110 - best-effort hardware cleanup
+                pass
 
 
 class DashboardControlPart(BaseDashboardControlPart):

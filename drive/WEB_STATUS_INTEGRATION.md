@@ -39,6 +39,7 @@ The status response additionally contains:
 }
 ```
 
-The integration never bypasses the LiDAR gate. It only exposes the gate's
-existing decision so the dashboard can display the actual reason for zero
-motor output.
+The integration never bypasses the LiDAR gate. In the ver2 wrapper it also
+distinguishes a healthy scan with no forward return (open space) from a wholly
+empty/failed scan. A failed scan still stops the vehicle, and a forward return
+inside the configured stop distance still stops it immediately.

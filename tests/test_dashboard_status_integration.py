@@ -1,8 +1,17 @@
+import math
+
+from drive.drive_ver2.dashboard_status_integration import classify_lidar_scan
 from drive.drive_ver3.dashboard_status_integration import (
     SAFETY_STATUS,
     DashboardControlPart,
     LidarSafetyGate,
 )
+
+
+class FakeLidarPoint:
+    def __init__(self, distance: float, angle: float) -> None:
+        self.range = distance
+        self.angle = angle
 
 
 class FakeClock:
@@ -63,3 +72,42 @@ def test_clear_lidar_reports_applied_drive_output():
     assert status["motion_state"] == "RUNNING"
     assert status["applied_throttle"] == 0.225
     assert status["lidar_blocked"] is False
+
+
+def test_healthy_scan_with_open_forward_sector_is_clear():
+    obstacle, healthy, nearest = classify_lidar_scan(
+        [FakeLidarPoint(1.0, math.pi / 2), FakeLidarPoint(1.2, -math.pi / 2)],
+        stop_distance_m=0.15,
+        forward_center_rad=0.0,
+        forward_half_angle_rad=math.radians(15),
+    )
+
+    assert healthy is True
+    assert obstacle is False
+    assert nearest is None
+
+
+def test_empty_scan_remains_fail_safe_detectable():
+    obstacle, healthy, nearest = classify_lidar_scan(
+        [],
+        stop_distance_m=0.15,
+        forward_center_rad=0.0,
+        forward_half_angle_rad=math.radians(15),
+    )
+
+    assert healthy is False
+    assert obstacle is False
+    assert nearest is None
+
+
+def test_close_forward_point_is_still_an_immediate_obstacle():
+    obstacle, healthy, nearest = classify_lidar_scan(
+        [FakeLidarPoint(0.12, 0.0), FakeLidarPoint(1.0, math.pi / 2)],
+        stop_distance_m=0.15,
+        forward_center_rad=0.0,
+        forward_half_angle_rad=math.radians(15),
+    )
+
+    assert healthy is True
+    assert obstacle is True
+    assert nearest == 0.12

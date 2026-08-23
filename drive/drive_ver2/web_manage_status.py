@@ -19,6 +19,7 @@ from dashboard_status_integration import (
     DashboardControlPart,
     LidarSafetyGate,
     YDLidarObstaclePart,
+    corrected_lidar_worker,
 )
 from docopt import docopt
 
@@ -29,6 +30,9 @@ def main() -> None:
         raise SystemExit("web_manage_status.py supports only the drive command")
 
     dashboard_control.DashboardControlPart = DashboardControlPart
+    # Keep the drive team's files intact while correcting the worker used by
+    # its existing YDLidarObstaclePart process.
+    lidar_safety._lidar_worker = corrected_lidar_worker
     lidar_safety.LidarSafetyGate = LidarSafetyGate
     lidar_safety.YDLidarObstaclePart = YDLidarObstaclePart
 
