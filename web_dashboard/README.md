@@ -87,7 +87,7 @@ DASHBOARD_VISION_TIMEOUT_S=35
 # Separate webcam Raspberry Pi (not the rover-control Pi).
 DASHBOARD_VISION_PI_STATE_URL=http://webcam-pi.local:8003/api/drive-state
 DASHBOARD_VISION_PI_STATE_TOKEN=replace-with-a-shared-secret
-DASHBOARD_VISION_PI_CAPTURE_URL=http://webcam-pi.local:8002
+DASHBOARD_VISION_PI_CAPTURE_URL=http://192.168.2.28:8002
 DASHBOARD_LIVE_POLL_INTERVAL_S=1.0
 DASHBOARD_TELEMETRY_STALE_AFTER_S=3.0
 # ai_report's event API (ADR-0009-llm-inferred-crop-zones.md). The

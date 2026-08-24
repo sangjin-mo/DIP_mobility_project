@@ -101,6 +101,34 @@ def test_capture_interval_is_forwarded_to_webcam_pi_endpoint():
     assert json.loads(request.data) == {"interval_sec": 10}
 
 
+def test_capture_interval_status_uses_latest_vision_api_shape():
+    service = VisionStateService(None, capture_url="http://webcam-pi.local:8002")
+    with patch(
+        "web_dashboard.services.vision_state_service.urllib.request.urlopen",
+        return_value=FakeResponse({"interval_sec": 1.5, "min_interval_sec": 0.2}),
+    ) as urlopen:
+        result = service.capture_status()
+
+    request = urlopen.call_args.args[0]
+    assert request.full_url == "http://webcam-pi.local:8002/interval"
+    assert request.method == "GET"
+    assert result == {
+        "interval_s": 1.5,
+        "min_interval_s": 0.2,
+        "max_interval_s": 10.0,
+    }
+
+
+def test_capture_interval_status_rejects_missing_applied_value():
+    service = VisionStateService(None, capture_url="http://webcam-pi.local:8002")
+    with patch(
+        "web_dashboard.services.vision_state_service.urllib.request.urlopen",
+        return_value=FakeResponse({"min_interval_sec": 0.2}),
+    ):
+        with pytest.raises(RuntimeError, match="interval_sec"):
+            service.capture_status()
+
+
 @pytest.mark.parametrize("interval", [0.1, 10.1])
 def test_capture_interval_rejects_values_outside_dashboard_range(interval):
     service = VisionStateService(None, capture_url="http://webcam-pi.local:8002")

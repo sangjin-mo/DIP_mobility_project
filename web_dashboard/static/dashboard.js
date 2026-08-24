@@ -587,9 +587,16 @@ async function deleteLocalVisionImages() {
 function renderVisionCaptureInterval(result) {
   const intervalInput = byId("vision-capture-interval");
   const interval = Number(result.interval_s);
+  const minimum = Number(result.min_interval_s);
+  const maximum = Number(result.max_interval_s);
+  if (Number.isFinite(minimum)) intervalInput.min = String(minimum);
+  if (Number.isFinite(maximum)) intervalInput.max = String(maximum);
   if (Number.isFinite(interval) && document.activeElement !== intervalInput) {
     intervalInput.value = String(interval);
   }
+  byId("vision-capture-interval-status").textContent = Number.isFinite(interval)
+    ? `현재 ${interval}초마다 저장`
+    : "현재 주기를 확인할 수 없음";
 }
 
 async function loadVisionCaptureInterval() {
@@ -600,6 +607,7 @@ async function loadVisionCaptureInterval() {
     renderVisionCaptureInterval(result);
   } catch (error) {
     byId("vision-capture").disabled = true;
+    byId("vision-capture-interval-status").textContent = "주기 확인 실패";
     byId("capture-result").textContent = `비전 Pi 촬영 주기 확인 실패: ${error.message}`;
   }
 }
@@ -638,9 +646,13 @@ async function applyVisionCaptureInterval() {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
-    renderVisionCaptureInterval(result);
-    byId("capture-result").textContent = `촬영 주기를 ${Number(result.interval_s)}초로 적용했습니다.`;
+    const verifyResponse = await fetch("/api/vision/capture-interval");
+    const verified = await verifyResponse.json();
+    if (!verifyResponse.ok) throw new Error(verified.detail || `HTTP ${verifyResponse.status}`);
+    renderVisionCaptureInterval(verified);
+    byId("capture-result").textContent = `촬영 주기를 ${Number(verified.interval_s)}초로 적용했습니다.`;
   } catch (error) {
+    byId("vision-capture-interval-status").textContent = "주기 적용 실패";
     byId("capture-result").textContent = `촬영 주기 변경 실패: ${error.message}`;
   } finally {
     input.disabled = !visionPiCaptureConfigured;

@@ -121,9 +121,12 @@ class VisionStateService:
 
     def capture_status(self) -> dict:
         result = self._request_capture_api("/interval", method="GET")
+        interval_s = self._required_number(result, "interval_sec")
+        min_interval_s = self._required_number(result, "min_interval_sec")
         return {
-            "interval_s": result.get("interval_sec"),
-            "min_interval_s": result.get("min_interval_sec"),
+            "interval_s": interval_s,
+            "min_interval_s": min_interval_s,
+            "max_interval_s": 10.0,
         }
 
     def set_capture_interval(self, interval_s: float) -> dict:
@@ -134,11 +137,19 @@ class VisionStateService:
             method="POST",
             payload={"interval_sec": interval_s},
         )
+        applied_interval_s = self._required_number(result, "interval_sec")
         return {
-            "interval_s": result.get("interval_sec"),
-            "requested_s": result.get("requested_sec"),
+            "interval_s": applied_interval_s,
+            "requested_s": result.get("requested_sec", interval_s),
             "clamped": result.get("clamped", False),
         }
+
+    @staticmethod
+    def _required_number(result: dict, key: str) -> float:
+        value = result.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RuntimeError(f"비전 Pi 촬영 API 응답에 {key} 값이 없습니다.")
+        return float(value)
 
     def _request_capture_api(
         self,

@@ -35,9 +35,11 @@ class DashboardSettings(BaseSettings):
     VISION_PI_STATE_URL: str | None = None
     VISION_PI_STATE_TOKEN: str | None = None
     VISION_PI_STATE_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
-    # Vision team's capture.py control server, for example
-    # http://WEBCAM_PI_IP:8002. This process already owns the webcam.
-    VISION_PI_CAPTURE_URL: str | None = None
+    # Vision team's capture.py control server. The project network contract
+    # fixes the webcam Raspberry Pi at 192.168.2.28 and capture.py at port
+    # 8002. An environment variable can still override this when the Pi IP
+    # changes.
+    VISION_PI_CAPTURE_URL: str | None = "http://192.168.2.28:8002"
 
     # ai_report's HTTP event API (its own EVENT_PORT, default 9101 -- see
     # ai_report/config.py -- not the rover control agent below). Set to
