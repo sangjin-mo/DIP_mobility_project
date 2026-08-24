@@ -30,7 +30,7 @@ report status and ask whether to continue.
 | 4 | [04-a5-llm-integration.md](04-a5-llm-integration.md) | `be8967d` | Structured-output schema, prompt, retry/backoff LLM client, reworked rendering |
 | 5 | [05-a6-resilience-regeneration.md](05-a6-resilience-regeneration.md) | `c264be1` | `ai-report regenerate`, prompt-version hash pinning, the second atomic-swap bug |
 | 6 | [06-push-and-attribution-scrub.md](06-push-and-attribution-scrub.md) | `fd58e09` | GitHub push saga, access issues, git-history rewrite, `CLAUDE.md` → `GUIDELINES.md` rename |
-| 7 | [07-drift-reconciliation-and-classification-fixes.md](07-drift-reconciliation-and-classification-fixes.md) | `db253ff` | Pi network watchdog, ADR-0010, doc-drift reconciliation, concurrent classification, the mtime bug that emptied every report |
+| 7 | [07-drift-reconciliation-and-classification-fixes.md](07-drift-reconciliation-and-classification-fixes.md) | `4fe6611` | Pi network watchdog, ADR-0010, doc-drift reconciliation, concurrent classification, the mtime bug that emptied every report |
 
 ## Cross-cutting decisions
 

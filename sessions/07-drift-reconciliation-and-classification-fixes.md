@@ -1,6 +1,6 @@
 # Drift reconciliation, the Pi watchdog, and the timestamp bug that emptied every report
 
-**Commit:** `db253ff`
+**Commit:** `4fe6611`
 **Date:** 2026-08-24 evening → 2026-08-25
 
 A mixed operations-and-correctness session. It began with routine demo prep
