@@ -1,5 +1,8 @@
 import json
+import sys
 import urllib.error
+from datetime import datetime
+from pathlib import Path
 from unittest.mock import patch
 
 from web_dashboard.services.patrol_event_service import PatrolEventService
@@ -49,7 +52,7 @@ def test_start_patrol_posts_patrol_start_and_tracks_active_id():
 
 
 def test_end_patrol_posts_patrol_end_for_the_active_patrol_and_clears_it():
-    service = PatrolEventService("http://127.0.0.1:9101/api/events")
+    service = PatrolEventService("http://127.0.0.1:9101/api/events", auto_classify_enabled=False)
 
     with patch(
         "web_dashboard.services.patrol_event_service.urllib.request.urlopen",
@@ -94,7 +97,7 @@ def test_network_failure_is_swallowed_not_raised():
 
 
 def test_starting_a_second_patrol_resets_the_sequence_counter():
-    service = PatrolEventService("http://127.0.0.1:9101/api/events")
+    service = PatrolEventService("http://127.0.0.1:9101/api/events", auto_classify_enabled=False)
 
     with patch(
         "web_dashboard.services.patrol_event_service.urllib.request.urlopen",
@@ -106,3 +109,100 @@ def test_starting_a_second_patrol_resets_the_sequence_counter():
 
     last_start_body = json.loads(urlopen.call_args_list[-1].args[0].data.decode("utf-8"))
     assert last_start_body["event_seq"] == 0  # fresh patrol, fresh sequence
+
+
+def test_end_patrol_triggers_classify_subprocess_for_todays_received_dir(tmp_path: Path):
+    received_root = tmp_path / "received"
+    today_dir = received_root / datetime.now().strftime("%Y-%m-%d")
+    today_dir.mkdir(parents=True)
+    log_dir = tmp_path / "logs"
+    service = PatrolEventService(
+        "http://127.0.0.1:9101/api/events",
+        auto_classify_enabled=True,
+        received_root=received_root,
+        log_dir=log_dir,
+    )
+
+    with patch(
+        "web_dashboard.services.patrol_event_service.urllib.request.urlopen",
+        return_value=FakeResponse(),
+    ), patch("web_dashboard.services.patrol_event_service.subprocess.Popen") as popen:
+        patrol_id = service.start_patrol()
+        service.end_patrol()
+
+    popen.assert_called_once()
+    argv = popen.call_args.args[0]
+    assert argv[:3] == [sys.executable, "-m", "vision.image_analysis.system.classify"]
+    assert "--patrol-id" in argv and patrol_id in argv
+    assert "--source-dir" in argv and str(today_dir) in argv
+    assert "--after-ts-ms" in argv
+    assert "--before-ts-ms" in argv
+    assert log_dir.is_dir()
+
+
+def test_end_patrol_skips_classify_when_disabled(tmp_path: Path):
+    received_root = tmp_path / "received"
+    (received_root / datetime.now().strftime("%Y-%m-%d")).mkdir(parents=True)
+    service = PatrolEventService(
+        "http://127.0.0.1:9101/api/events",
+        auto_classify_enabled=False,
+        received_root=received_root,
+        log_dir=tmp_path / "logs",
+    )
+
+    with patch(
+        "web_dashboard.services.patrol_event_service.urllib.request.urlopen",
+        return_value=FakeResponse(),
+    ), patch("web_dashboard.services.patrol_event_service.subprocess.Popen") as popen:
+        service.start_patrol()
+        service.end_patrol()
+
+    popen.assert_not_called()
+
+
+def test_end_patrol_skips_classify_when_source_dir_missing(tmp_path: Path):
+    """No images arrived today (or pc_server never ran) -- must not spawn
+    classify.py against a directory that doesn't exist."""
+    service = PatrolEventService(
+        "http://127.0.0.1:9101/api/events",
+        auto_classify_enabled=True,
+        received_root=tmp_path / "received",  # deliberately never created
+        log_dir=tmp_path / "logs",
+    )
+
+    with patch(
+        "web_dashboard.services.patrol_event_service.urllib.request.urlopen",
+        return_value=FakeResponse(),
+    ), patch("web_dashboard.services.patrol_event_service.subprocess.Popen") as popen:
+        service.start_patrol()
+        service.end_patrol()
+
+    popen.assert_not_called()
+
+
+def test_end_patrol_skips_classify_when_patrol_end_post_fails(tmp_path: Path):
+    """ai_report never saw PATROL_END, so it will never poll for this
+    patrol's analysis files -- running classify.py would be pure waste
+    (and an unwanted OpenAI call)."""
+    received_root = tmp_path / "received"
+    (received_root / datetime.now().strftime("%Y-%m-%d")).mkdir(parents=True)
+    service = PatrolEventService(
+        "http://127.0.0.1:9101/api/events",
+        auto_classify_enabled=True,
+        received_root=received_root,
+        log_dir=tmp_path / "logs",
+    )
+
+    with patch(
+        "web_dashboard.services.patrol_event_service.urllib.request.urlopen",
+        return_value=FakeResponse(),
+    ):
+        service.start_patrol()
+
+    with patch(
+        "web_dashboard.services.patrol_event_service.urllib.request.urlopen",
+        side_effect=urllib.error.URLError("connection refused"),
+    ), patch("web_dashboard.services.patrol_event_service.subprocess.Popen") as popen:
+        service.end_patrol()
+
+    popen.assert_not_called()

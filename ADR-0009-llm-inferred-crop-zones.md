@@ -82,8 +82,12 @@ existing event-based and distance-based paths:
 - `zone_name` for a crop-type zone is derived from the crop class
   (`config.py::CROP_DISPLAY_NAMES`), not `settings.ZONE_NAMES` (which is
   keyed by a physical `zone_id` that no longer means a location here).
-- Still open: nothing yet automatically routes a specific patrol's webcam
-  captures into `classify.py --patrol-id <that patrol>` — that script still
-  runs manually against a chosen `--source-dir`. Auto-triggering it (e.g.
-  on `PATROL_END`, against whatever was captured during that patrol's time
-  window) is a follow-up, not part of this decision.
+- 2026-08-24 follow-up, now done: `web_dashboard/services/patrol_event_service.py::PatrolEventService.end_patrol`
+  auto-triggers `classify.py --patrol-id <that patrol>` against
+  `received/{date}/`, filtered to that patrol's own window via the new
+  `--after-ts-ms`/`--before-ts-ms` flags (file mtime, the same clock the
+  dashboard's own `PATROL_START`/`PATROL_END` events are stamped with) —
+  see `classify_patrol`'s docstring in `vision/image_analysis/system/classify.py`.
+  Still open: a patrol that spans midnight will miss images that landed in
+  the previous day's `received/` folder — not handled, judged not worth
+  the complexity for a case this rare.

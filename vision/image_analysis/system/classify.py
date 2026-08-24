@@ -155,6 +155,8 @@ async def classify_patrol(
     model: str,
     timeout_s: float = 60.0,
     client: AsyncOpenAI | None = None,
+    after_ts_ms: int | None = None,
+    before_ts_ms: int | None = None,
 ) -> int:
     """Classify every image in `source_dir`, writing C2-contract output
     under `data_root`, then the `_COMPLETE` marker.
@@ -178,6 +180,19 @@ async def classify_patrol(
     produces a text-only report on the `ai_report` side, same as any other
     zero-detections case.
 
+    `after_ts_ms`/`before_ts_ms` (both inclusive, both optional) restrict
+    `source_dir` to files whose mtime falls in that window -- the same
+    epoch-ms clock `web_dashboard/services/patrol_event_service.py` stamps
+    its `PATROL_START`/`PATROL_END` events with. This is what lets a single
+    shared `received/{date}/` directory (holding every patrol's images for
+    that day) be classified one patrol at a time: `web_dashboard`'s STOP
+    handler passes this patrol's own start/end timestamps so images from a
+    different patrol earlier or later the same day are left alone. mtime
+    (not the capture-time embedded in the filename) is used deliberately --
+    it is already `captured_at_ms`'s own source of truth below, and using
+    the same field for both the filter and the stored value keeps them from
+    disagreeing with each other even by a few seconds.
+
     Returns the number of images successfully classified. Called by `main`
     and directly by tests.
     """
@@ -188,8 +203,15 @@ async def classify_patrol(
     analysis_dir.mkdir(parents=True, exist_ok=True)
 
     sources = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+    if after_ts_ms is not None or before_ts_ms is not None:
+        sources = [
+            p for p in sources
+            if (after_ts_ms is None or p.stat().st_mtime * 1000 >= after_ts_ms)
+            and (before_ts_ms is None or p.stat().st_mtime * 1000 <= before_ts_ms)
+        ]
     if not sources:
-        logger.warning("no images found in %s", source_dir)
+        logger.warning("no images found in %s (after_ts_ms=%s, before_ts_ms=%s)",
+                        source_dir, after_ts_ms, before_ts_ms)
 
     classified = 0
     try:
@@ -243,6 +265,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", default=None, type=Path, help="defaults to ai_report's configured DATA_ROOT")
     parser.add_argument("--model", default=None, help="defaults to ai_report's configured LLM_MODEL")
     parser.add_argument("--timeout-s", type=float, default=60.0)
+    parser.add_argument("--after-ts-ms", type=int, default=None,
+                         help="only classify images with mtime >= this epoch-ms value")
+    parser.add_argument("--before-ts-ms", type=int, default=None,
+                         help="only classify images with mtime <= this epoch-ms value")
     return parser
 
 
@@ -260,7 +286,10 @@ def main(argv: list[str] | None = None) -> int:
     model = args.model or settings.LLM_MODEL
 
     classified = asyncio.run(
-        classify_patrol(args.patrol_id, args.source_dir, data_root, model, args.timeout_s)
+        classify_patrol(
+            args.patrol_id, args.source_dir, data_root, model, args.timeout_s,
+            after_ts_ms=args.after_ts_ms, before_ts_ms=args.before_ts_ms,
+        )
     )
     print(f"patrol_id={args.patrol_id} classified {classified} image(s) under {data_root}")
     return 0

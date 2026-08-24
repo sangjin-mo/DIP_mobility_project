@@ -92,6 +92,7 @@ def create_app(
     patrol_events = PatrolEventService(
         web_config.AI_REPORT_EVENT_URL,
         timeout_s=web_config.AI_REPORT_EVENT_TIMEOUT_S,
+        auto_classify_enabled=web_config.AUTO_CLASSIFY_ENABLED,
     )
 
     templates = Environment(

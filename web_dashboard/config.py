@@ -46,6 +46,12 @@ class DashboardSettings(BaseSettings):
     # start/end, since drive_ver2 never emits these events itself.
     AI_REPORT_EVENT_URL: str | None = None
     AI_REPORT_EVENT_TIMEOUT_S: float = Field(default=2.0, gt=0, le=10)
+    # On STOP, automatically run vision/image_analysis/system/classify.py
+    # against this patrol's own received/ images (see
+    # PatrolEventService.end_patrol) so a real report can be generated
+    # without a manual classify.py invocation. Each run makes one LLM
+    # vision call per image; set False to disable auto-billing per patrol.
+    AUTO_CLASSIFY_ENABLED: bool = True
 
     # Raspberry Pi control agent. This must point at the agent's command
     # endpoint, for example http://192.168.0.42:9200/api/control.

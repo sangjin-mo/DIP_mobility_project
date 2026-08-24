@@ -94,6 +94,10 @@ DASHBOARD_TELEMETRY_STALE_AFTER_S=3.0
 # dashboard is what marks a patrol's start/end now, since drive_ver2 never
 # sends PATROL_START/PATROL_END itself.
 DASHBOARD_AI_REPORT_EVENT_URL=http://127.0.0.1:9101/api/events
+# On STOP, auto-run vision/image_analysis/system/classify.py against this
+# patrol's own received/ images (see PatrolEventService.end_patrol). One
+# LLM vision call per image; set false to disable auto-billing per patrol.
+DASHBOARD_AUTO_CLASSIFY_ENABLED=true
 DASHBOARD_ROVER_CONTROL_URL=http://raspberry-pi.local:9200/api/control
 # Optional; defaults to the /api/status sibling of ROVER_CONTROL_URL.
 DASHBOARD_ROVER_STATUS_URL=http://raspberry-pi.local:9200/api/status

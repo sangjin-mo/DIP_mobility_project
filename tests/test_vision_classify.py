@@ -16,6 +16,8 @@ like `tests/test_llm_client.py`.
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -123,6 +125,34 @@ async def test_writes_complete_marker_even_with_zero_source_images(tmp_path: Pat
 
     assert count == 0
     assert (data_root / "analysis" / PATROL_ID / "_COMPLETE").is_file()
+
+
+async def test_after_before_ts_ms_restricts_to_images_in_that_window(tmp_path: Path):
+    """A shared `received/{date}/` directory can hold more than one patrol's
+    images; `after_ts_ms`/`before_ts_ms` (web_dashboard's own recorded
+    START/END epoch-ms) must pick out only this patrol's own files by mtime.
+    """
+    source_dir = tmp_path / "source"
+    _write_fake_source_image(source_dir / "before.jpg", (200, 30, 30))
+    _write_fake_source_image(source_dir / "during.jpg", (30, 200, 30))
+    _write_fake_source_image(source_dir / "after.jpg", (30, 30, 200))
+    data_root = tmp_path / "data"
+
+    now = time.time()
+    os.utime(source_dir / "before.jpg", (now - 100, now - 100))
+    os.utime(source_dir / "during.jpg", (now - 50, now - 50))
+    os.utime(source_dir / "after.jpg", (now, now))
+
+    count = await classify_patrol(
+        PATROL_ID, source_dir, data_root, model="gpt-5.6-luna", client=_mock_client(),
+        after_ts_ms=int((now - 60) * 1000), before_ts_ms=int((now - 40) * 1000),
+    )
+
+    assert count == 1
+    analysis_dir = data_root / "analysis" / PATROL_ID
+    [analysis_path] = analysis_dir.glob("*.json")
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    assert analysis["image_path"].endswith("_000.jpg")
 
 
 async def test_confidence_required_unless_undetermined_is_enforced(tmp_path: Path):
