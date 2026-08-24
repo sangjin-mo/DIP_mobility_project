@@ -1,0 +1,21 @@
+[Unit]
+Description=Wi-Fi watchdog (forces NetworkManager to bring the link up)
+Documentation=file:/usr/local/sbin/pi-net-watchdog.sh
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/pi-net-watchdog.sh
+Restart=always
+RestartSec=10
+# Logs go to the journal: journalctl -u pi-net-watchdog -f
+StandardOutput=journal
+StandardError=journal
+# Uncomment to allow the last-resort reboot after ~10 failed repair cycles:
+# Environment=REBOOT_ENABLED=1
+# Other knobs: IFACE, CHECK_INTERVAL_SEC, FAIL_THRESHOLD, GRACE_SEC, FALLBACK_TARGETS
+# Environment=CHECK_INTERVAL_SEC=60
+
+[Install]
+WantedBy=multi-user.target

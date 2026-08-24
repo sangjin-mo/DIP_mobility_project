@@ -40,8 +40,16 @@ class Settings(BaseSettings):
     DATA_ROOT: Path = Path("./data")
     REPORT_ROOT: Path = Path("./reports")
 
-    # Ingest behaviour
-    VIS_COMPLETE_TIMEOUT_S: int = 600
+    # Ingest behaviour.
+    # VIS_COMPLETE_TIMEOUT_S is a give-up ceiling, not a delay: `_COMPLETE` is
+    # written by `vision/image_analysis/system/classify.py` the moment it
+    # finishes (ADR-0010), so the watcher returns then and the ceiling only
+    # applies when classify never ran or died before touching the marker.
+    # Cut from 600 to 120 for demo runs -- with a short track the interesting
+    # question is "how fast do I find out it broke", not "how long can VIS
+    # take". Override in .env if a patrol's classification legitimately runs
+    # longer (classify.py is sequential: roughly 2-6s per captured image).
+    VIS_COMPLETE_TIMEOUT_S: int = 120
     VIS_WATCHER_POLL_INTERVAL_S: float = 1.0
 
     # Pipeline (used from A2 onward; declared now so the surface matches spec §3)

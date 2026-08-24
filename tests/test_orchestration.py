@@ -145,9 +145,9 @@ async def test_llm_failure_still_produces_a_fallback_report(tmp_path: Path, stor
 
 
 async def test_proceeds_without_vis_complete_after_timeout(tmp_path: Path, store):
-    """Spec §12: '_COMPLETE never written -> Timeout 600s -> Proceed with
+    """Spec §12: '_COMPLETE never written -> Timeout 120s -> Proceed with
     available analyses, note the gap.' Uses a short timeout (see _settings)
-    so the test doesn't actually wait 600s.
+    so the test doesn't actually wait out the configured ceiling.
     """
     settings = _settings(tmp_path, VIS_COMPLETE_TIMEOUT_S=1)
     zone_ids = _populate_store(store)

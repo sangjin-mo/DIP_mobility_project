@@ -55,8 +55,10 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -69,6 +71,46 @@ from ai_report.models import AnalysisResult, Detection
 logger = logging.getLogger(__name__)
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg")
+
+# How many images may be in flight at once. Classification is one vision call
+# per image and `capture.py` saves ~1 image/sec while the rover is RUNNING, so
+# a one-minute patrol is ~60 calls; sequentially that is minutes of wall clock
+# and it lands directly in the gap between STOP and the report being ready
+# (ADR-0010). 8 keeps that well under `VIS_COMPLETE_TIMEOUT_S` without being
+# aggressive enough to trip per-minute request limits on a small account.
+DEFAULT_CONCURRENCY = 8
+
+# `capture.py::make_filename` names every frame `YYYYMMDD_HHMMSS_{cam}_{seq}.jpg`
+# in the Pi's local time. That name is the only surviving record of when a frame
+# was actually taken: `pc_server/routes_upload.py` writes uploads with a plain
+# `open(...).write(...)`, so every file in one transfer batch ends up with the
+# same mtime -- the moment it landed on the PC, often minutes after capture and
+# after the patrol already ended.
+_CAPTURE_NAME_RE = re.compile(r"^(?P<stamp>\d{8}_\d{6})_")
+
+
+def capture_ts_ms(path: Path) -> int:
+    """Epoch-ms this frame was captured, read from its filename.
+
+    Falls back to mtime for any name that doesn't carry a stamp (a
+    hand-dropped file, a different camera's convention), which is the old
+    behaviour and still better than refusing to classify the image.
+
+    The stamp has no timezone, so it is interpreted in this machine's local
+    time -- correct as long as the Pi and the PC agree on a timezone, which
+    they do today (both KST). A mismatch would shift `captured_at_ms` and the
+    patrol window filter by the offset.
+    """
+    match = _CAPTURE_NAME_RE.match(path.name)
+    if match is None:
+        logger.debug("no capture stamp in %s; falling back to mtime", path.name)
+        return int(path.stat().st_mtime * 1000)
+    try:
+        parsed = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S")
+    except ValueError:
+        logger.warning("unparseable capture stamp in %s; falling back to mtime", path.name)
+        return int(path.stat().st_mtime * 1000)
+    return int(parsed.timestamp() * 1000)
 
 SYSTEM_PROMPT = (
     "당신은 온실 작물 순찰 사진 한 장을 분석하는 시스템입니다. "
@@ -109,10 +151,56 @@ def _classification_schema() -> dict:
     return _make_strict(ImageClassification.model_json_schema(by_alias=True))
 
 
+class FrameContext(BaseModel):
+    """Where one frame sits in its patrol's capture sweep.
+
+    Passed to the model as text alongside the image so it knows it is looking
+    at one frame of a continuous 1-per-second sweep rather than an isolated
+    photo. Without it, a crop bisected by the frame edge reads as an ordinary
+    partial crop with no explanation, and there is no signal at all that the
+    neighbouring frames overlap heavily.
+
+    This does not let the model deduplicate across frames -- each call still
+    sees exactly one image, and per ADR-0006 the output stays 관측 수, not
+    개체 수. It only makes each independent judgement better informed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int          # 0-based position in the patrol's sorted frames
+    total: int
+    captured_at_ms: int
+    gap_s: float | None = None   # seconds since the previous frame, None for the first
+
+    def as_prompt_text(self) -> str:
+        when = datetime.fromtimestamp(self.captured_at_ms / 1000).strftime("%H:%M:%S")
+        gap = "이 순찰의 첫 프레임입니다." if self.gap_s is None else (
+            f"직전 프레임과의 간격은 약 {self.gap_s:.1f}초입니다."
+        )
+        return (
+            f"이 사진은 순찰 중 연속 촬영된 {self.total}장 가운데 "
+            f"{self.index + 1}번째 프레임이며, 촬영 시각은 {when}입니다. {gap} "
+            "로버가 이동하면서 촬영하므로 인접한 프레임끼리는 화면이 크게 겹치고, "
+            "한 개체가 프레임 경계에 걸려 잘린 채로 보이는 경우가 많습니다. "
+            "프레임 가장자리에서 잘린 작물은 잘린 조각마다 따로 세지 말고 "
+            "하나의 관측으로 세십시오. 여전히 이 사진 한 장에 보이는 것만 "
+            "판단하고, 다른 프레임에 무엇이 찍혔을지는 추측하지 마십시오."
+        )
+
+
 async def classify_image(
-    client: AsyncOpenAI, image_bytes: bytes, model: str, timeout_s: float
+    client: AsyncOpenAI,
+    image_bytes: bytes,
+    model: str,
+    timeout_s: float,
+    context: FrameContext | None = None,
 ) -> ImageClassification:
     """One vision LLM call for one image's raw bytes.
+
+    `context`, when given, is sent as a text block before the image so the
+    model knows which frame of the sweep it is looking at (see
+    `FrameContext`). It is optional so this stays callable for a one-off
+    image with no patrol around it.
 
     Raises on any failure (API error, schema-invalid response, or a
     `Detection` that violates its own `confidence`-required-unless-판단불가
@@ -130,9 +218,10 @@ async def classify_image(
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                ],
+                "content": (
+                    ([{"type": "text", "text": context.as_prompt_text()}] if context else [])
+                    + [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]
+                ),
             },
         ],
         response_format={
@@ -157,6 +246,7 @@ async def classify_patrol(
     client: AsyncOpenAI | None = None,
     after_ts_ms: int | None = None,
     before_ts_ms: int | None = None,
+    concurrency: int = DEFAULT_CONCURRENCY,
 ) -> int:
     """Classify every image in `source_dir`, writing C2-contract output
     under `data_root`, then the `_COMPLETE` marker.
@@ -204,45 +294,84 @@ async def classify_patrol(
 
     sources = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
     if after_ts_ms is not None or before_ts_ms is not None:
+        # Capture time, not mtime: images are usually pulled off the Pi *after*
+        # STOP, so their mtime is later than this patrol's `before_ts_ms` and
+        # filtering on it silently discarded every frame.
         sources = [
             p for p in sources
-            if (after_ts_ms is None or p.stat().st_mtime * 1000 >= after_ts_ms)
-            and (before_ts_ms is None or p.stat().st_mtime * 1000 <= before_ts_ms)
+            if (after_ts_ms is None or capture_ts_ms(p) >= after_ts_ms)
+            and (before_ts_ms is None or capture_ts_ms(p) <= before_ts_ms)
         ]
     if not sources:
         logger.warning("no images found in %s (after_ts_ms=%s, before_ts_ms=%s)",
                         source_dir, after_ts_ms, before_ts_ms)
+
+    # One stat/parse per frame, done up front: `classify_one` needs both its
+    # own capture time and the gap to the previous frame, and `sources` is
+    # already sorted by name, which for capture.py's naming is chronological.
+    capture_times = [capture_ts_ms(p) for p in sources]
 
     classified = 0
     try:
         if own_client:
             client = AsyncOpenAI(api_key=get_settings().OPENAI_API_KEY, timeout=timeout_s)
 
-        for index, src in enumerate(sources):
+        # `image_id` is bound to the image's position in the sorted `sources`
+        # list before anything is dispatched, so it stays identical to what the
+        # old sequential loop produced regardless of the order calls complete
+        # in. `select_images.py` and the C2 fixtures depend on that numbering.
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def classify_one(index: int, src: Path) -> bool:
             image_id = f"{patrol_id}_{index:03d}"
-            image_bytes = src.read_bytes()
-
-            try:
-                result = await classify_image(client, image_bytes, model, timeout_s)
-            except Exception:
-                logger.exception("classification failed for %s; skipping this image", src)
-                continue
-
-            shutil.copyfile(src, images_dir / f"{image_id}.jpg")
-            analysis = AnalysisResult(
-                image_id=image_id,
-                patrol_id=patrol_id,
-                captured_at_ms=int(src.stat().st_mtime * 1000),
-                image_path=f"images/{patrol_id}/{image_id}.jpg",
-                image_quality=result.image_quality,
-                detections=result.detections,
+            captured_ms = capture_times[index]
+            previous_ms = capture_times[index - 1] if index > 0 else None
+            context = FrameContext(
+                index=index,
+                total=len(sources),
+                captured_at_ms=captured_ms,
+                gap_s=None if previous_ms is None else (captured_ms - previous_ms) / 1000,
             )
-            (analysis_dir / f"{image_id}.json").write_text(
-                json.dumps(analysis.model_dump(mode="json", by_alias=True), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            classified += 1
-            logger.info("classified %s -> %d detection(s)", src.name, len(result.detections))
+            # Both the read and the call are inside the semaphore so that at
+            # most `concurrency` images are held in memory at once -- a patrol
+            # can be hundreds of frames at 1 capture/sec.
+            async with semaphore:
+                image_bytes = src.read_bytes()
+                try:
+                    result = await classify_image(client, image_bytes, model, timeout_s, context)
+                except Exception:
+                    logger.exception("classification failed for %s; skipping this image", src)
+                    return False
+
+                shutil.copyfile(src, images_dir / f"{image_id}.jpg")
+                analysis = AnalysisResult(
+                    image_id=image_id,
+                    patrol_id=patrol_id,
+                    captured_at_ms=captured_ms,
+                    image_path=f"images/{patrol_id}/{image_id}.jpg",
+                    image_quality=result.image_quality,
+                    detections=result.detections,
+                )
+                (analysis_dir / f"{image_id}.json").write_text(
+                    json.dumps(analysis.model_dump(mode="json", by_alias=True), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                logger.info("classified %s -> %d detection(s)", src.name, len(result.detections))
+                return True
+
+        # return_exceptions=True keeps one unexpected failure (something
+        # outside classify_image's own try, e.g. a disk error on write) from
+        # cancelling its siblings -- the sequential version skipped and
+        # carried on, and `_COMPLETE` must still be written either way.
+        outcomes = await asyncio.gather(
+            *(classify_one(i, src) for i, src in enumerate(sources)),
+            return_exceptions=True,
+        )
+        for src, outcome in zip(sources, outcomes):
+            if isinstance(outcome, BaseException):
+                logger.error("unexpected failure writing results for %s: %r", src, outcome)
+            elif outcome:
+                classified += 1
     finally:
         if own_client and client is not None:
             await client.close()
@@ -265,6 +394,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", default=None, type=Path, help="defaults to ai_report's configured DATA_ROOT")
     parser.add_argument("--model", default=None, help="defaults to ai_report's configured LLM_MODEL")
     parser.add_argument("--timeout-s", type=float, default=60.0)
+    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY,
+                         help=f"images classified in parallel (default {DEFAULT_CONCURRENCY}; 1 = sequential)")
     parser.add_argument("--after-ts-ms", type=int, default=None,
                          help="only classify images with mtime >= this epoch-ms value")
     parser.add_argument("--before-ts-ms", type=int, default=None,
@@ -289,6 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         classify_patrol(
             args.patrol_id, args.source_dir, data_root, model, args.timeout_s,
             after_ts_ms=args.after_ts_ms, before_ts_ms=args.before_ts_ms,
+            concurrency=args.concurrency,
         )
     )
     print(f"patrol_id={args.patrol_id} classified {classified} image(s) under {data_root}")

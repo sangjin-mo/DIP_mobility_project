@@ -61,7 +61,10 @@ async def run_patrol_pipeline(
 
     1. `VisWatcher.watch` — poll for VIS's `_COMPLETE` marker, per spec
        §12's error-handling matrix row ("`_COMPLETE` never written ->
-       Timeout 600s -> Proceed with available analyses, note the gap").
+       Timeout 120s -> Proceed with available analyses, note the gap").
+       Since ADR-0010 the marker is written by our own classify.py
+       subprocess rather than by another team, so this returns as soon as
+       classification finishes; the timeout is only the give-up bound.
        `settings.VIS_COMPLETE_TIMEOUT_S`/`VIS_WATCHER_POLL_INTERVAL_S` were
        already declared in `config.py` for exactly this call and were
        unused until now.

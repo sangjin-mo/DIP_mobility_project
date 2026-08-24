@@ -30,6 +30,14 @@ Update the Status column as phases complete. This table is what a reviewer check
 
 † Added during design review; not in the original requirements list. See `02-ai-subsystem-spec.md` and the ADRs for rationale.
 
+> [!FLAG]
+> **ADR-0001 through ADR-0008 are cited throughout this table but are not in
+> this repo** — `git log --diff-filter=A` shows they were never committed. Only
+> `ADR-0009` and `ADR-0010` exist as files. Rows citing ADR-0003/0004/0005/0006/0008
+> trace to a rationale that has to be reconstructed from `README.md`'s one-line
+> index and from `GUIDELINES.md`'s hard rules, which restate several of those
+> decisions. Treat those citations as pointers to the rule, not to a record.
+
 ---
 
 ## Derived requirements — design decisions with no source requirement
@@ -95,7 +103,7 @@ Raised during design review. These belong to other teams but affect our inputs.
 
 | Category | Count | Traced | Untested |
 |---|---|---|---|
-| AI requirements | 13 | 13 | 13 (pre-implementation) |
-| Derived requirements | 7 | 7 | 7 |
+| AI requirements | 13 | 13 | 0 — 12 ✓, AI_104 deferred (184 tests pass as of 2026-08-25) |
+| Derived requirements | 9 | 9 | 0 — D_007 still WIP (empty fixtures) |
 | Upstream dependencies | 8 | — | 4 blocked |
 | Requirement defects | 5 | — | 5 open |

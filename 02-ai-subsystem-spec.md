@@ -72,7 +72,7 @@ EVENT_PORT = 9101
 DATA_ROOT = "./data"
 REPORT_ROOT = "./reports"
 
-VIS_COMPLETE_TIMEOUT_S = 600
+VIS_COMPLETE_TIMEOUT_S = 120
 IMAGES_PER_ZONE_MAX = 3
 IMAGE_QUALITY_MIN = 0.40
 IMAGE_RESIZE_PX = 768
@@ -384,7 +384,7 @@ Regeneration: `payload.json` is the complete LLM input. `cli.py regenerate {patr
 |---|---|---|
 | UDP packet malformed | Pydantic validation | Log, drop the packet, increment a counter |
 | Unknown `state` enum from VIS | Pydantic validation | **Raise.** A contract violation must not be papered over |
-| `_COMPLETE` never written | Timeout 600 s | Proceed with available analyses, note the gap |
+| `_COMPLETE` never written | Timeout 120 s (was 600; see ADR-0010) | Proceed with available analyses, note the gap |
 | No `ZONE_ENTER` events | Empty boundary list | Fallback segmentation, `confidence: "low"` |
 | Zone has no images | Empty selection | Text-only zone, note 이미지 없음 |
 | LLM 429 / 5xx / timeout | HTTP status | Retry 3× with backoff |
