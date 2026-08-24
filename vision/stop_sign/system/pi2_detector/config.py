@@ -2,13 +2,14 @@
 # 값 대부분은 실측 전 TODO — design/README.md §8 "아직 안 정한 것" 참고
 
 # --- 카메라 ---
-# 2026-08-24: 2호기 실기에 물리 카메라가 1대(HD Pro Webcam C920)뿐인 것으로 확인됨.
-# /dev/video0, /dev/video1은 별개 카메라가 아니라 그 웹캠 하나가 만드는 두 디바이스 노드라서,
-# image_transfer(capture.py)와 stop_sign이 각자 cv2.VideoCapture로 직접 열면 충돌함
-# (동시 사용 시 한쪽만 정상 동작하는 버그의 원인). 그래서 카메라는 image_transfer의
-# capture.py 프로세스 하나만 열고, stop_sign은 그 프로세스가 이미 갖고 있는 최신 프레임을
-# HTTP로 받아오는 방식으로 전환함. 실제 측면 전용 카메라가 나중에 배선되면
-# cv2.VideoCapture(그 인덱스)로 직접 여는 방식으로 되돌리면 됨.
+# 2026-08-23: 실측 결과 이 Pi의 웹캠(C920)은 물리 카메라가 1개뿐이고, index 1은
+# 캡처용이 아닌 메타데이터 전용 노드(cv2.VideoCapture(1)도 항상 opened=False)로 확인됨.
+# 2026-08-24: 그렇다고 image_transfer(capture.py)와 stop_sign이 둘 다 index 0을 직접
+# cv2.VideoCapture로 열면 그 자체로 또 충돌(동시 오픈 미지원, 한쪽만 정상 동작)하므로,
+# 카메라는 image_transfer의 capture.py 프로세스 하나만 열고, stop_sign은 그 프로세스가
+# 이미 갖고 있는 최신 프레임을 HTTP로 받아오는 방식으로 전환함(이전 "index 0 공유" 안을
+# 대체). 실제 측면 전용 카메라가 나중에 배선되면 cv2.VideoCapture(그 인덱스)로 직접 여는
+# 방식으로 되돌리면 됨.
 CAPTURE_SERVICE_URL = "http://127.0.0.1:8002/latest-frame"
 CAPTURE_SERVICE_TIMEOUT_SEC = 2.0
 
