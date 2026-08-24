@@ -17,9 +17,9 @@ DISK_CHECK_INTERVAL_SEC = 30  # 매 프레임마다 확인하지 않고 이 간�
 MAX_CONSECUTIVE_FAILURES = 5  # 이 횟수 연속 실패하면 카메라 재연결 시도
 RECONNECT_RETRY_DELAY_SEC = 3.0  # 재연결 재시도 간격
 
-# 전송 대상 (PC 수신 서버)
-# 대시보드 PC(Seung-Jins-Macbook-3)의 현재 IP. DHCP라 바뀔 수 있음 — 바뀌면
-# 여기와 실제 Pi에 배포된 파일 둘 다 갱신할 것 (2026-08-23에 .93 -> 이 값으로 갱신).
+# 전송 대상 (통합 서버 — web_dashboard + pc_server가 함께 뜨는 central 서버 한 대)
+# 2026-08-23 확정: central 서버 IP = 192.168.2.175. 이 PC(개발자 노트북)에서는
+# 더 이상 pc_server/web_dashboard를 안 켬 — central 서버 하나로 전부 통제.
 SERVER_HOST = "192.168.2.175"
 SERVER_PORT = 8000
 SERVER_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"

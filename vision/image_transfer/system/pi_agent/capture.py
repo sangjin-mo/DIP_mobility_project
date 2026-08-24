@@ -10,7 +10,7 @@ from datetime import datetime
 import cv2
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 import config
@@ -150,6 +150,25 @@ def capture_now():
     return {"status": "ok", "filename": result["filename"]}
 
 
+@control_app.get("/latest-frame")
+def latest_frame():
+    """카메라를 직접 열지 않는 다른 기능(예: stop_sign)이 이 프로세스가 이미 들고 있는
+    최신 프레임을 받아가는 용도. 물리 카메라가 1대뿐이라 두 기능이 각자 cv2.VideoCapture를
+    열면 충돌하므로(카메라를 실제로 여는 건 이 프로세스 하나로 통일), HTTP로 프레임만 공유한다.
+    """
+    with _frame_lock:
+        frame = None if _latest_frame is None else _latest_frame.copy()
+    if frame is None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "reason": "아직 카메라 프레임이 준비되지 않았습니다."},
+        )
+    ok, buf = cv2.imencode(".jpg", frame)
+    if not ok:
+        return JSONResponse(status_code=500, content={"status": "error", "reason": "인코딩 실패"})
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
 @control_app.get("/interval")
 def get_interval():
     return {"interval_sec": get_capture_interval(), "min_interval_sec": config.MIN_CAPTURE_INTERVAL_SEC}
@@ -198,10 +217,15 @@ def main():
     consecutive_failures = 0
     last_disk_check = 0.0
     last_state_check = 0.0
+    last_save_ts = 0.0  # 저장 주기 게이팅용 — 프레임 읽기 자체는 이 값과 무관하게 매번 수행
     vehicle_running = False
 
     try:
         while True:
+            # 카메라 읽기 + _latest_frame 갱신은 촬영 주기와 무관하게 매 루프 수행한다.
+            # (stop_sign 등 인식 기능이 /latest-frame으로 이 프레임을 받아가는데, 인식은
+            # 주기 제한이 없어야 하고 "저장"만 주기를 지켜야 하기 때문 — 저장 여부만 아래서
+            # 시간차로 게이팅한다. cap.read()가 카메라의 실제 프레임레이트로 자연히 블로킹됨.)
             ret, frame = cap.read()
 
             if not ret:
@@ -229,12 +253,15 @@ def main():
                 last_state_check = now_ts
 
             if not vehicle_running:
-                time.sleep(get_capture_interval())
                 continue
 
             if now_ts - last_disk_check >= config.DISK_CHECK_INTERVAL_SEC:
                 ensure_disk_space()
                 last_disk_check = now_ts
+
+            if now_ts - last_save_ts < get_capture_interval():
+                continue
+            last_save_ts = now_ts
 
             try:
                 result = save_frame_now(frame)
@@ -244,8 +271,6 @@ def main():
 
             total_saved += 1
             print(f"저장: {result['filepath']}", flush=True)
-
-            time.sleep(get_capture_interval())
 
     except KeyboardInterrupt:
         print(f"\n종료. 총 {total_saved}장 저장됨.", flush=True)

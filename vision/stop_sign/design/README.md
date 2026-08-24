@@ -219,6 +219,8 @@ features/stop_sign/
 | 재정지 방지 | **2호기 detector.py에 고정 시간 쿨다운(lockout)** — HIGH 전송 후 일정 시간 동안 재신호 억제 | §3-1 참고 — 표지판이 계속 보이는 동안 반복적으로 정지 신호를 재전송하지 않기 위함(실제 재출발이 사람 손으로 이뤄지므로, 애초에 우려했던 "자동재출발 직후 재정지"는 아니지만 신호 남발 방지 차원에서 유지) |
 | 정차 중 자원 절약 | ~~PC가 `POST /vehicle-state`로 푸시~~ → **2026-08-22 변경: PC `web_dashboard`의 `GET /api/control/status`를 2호기가 직접 폴링**(1초 주기), `state != "RUNNING"`이면 YOLO/제스처 추론 생략 | 호출 주체가 없는 문제 해결(§8 참고). GPIO27 방식은 채택 안 함 — 점퍼케이블 자체가 불가능해져 GPIO 경로 전체가 폐기됨(`features/mediapipe/design/README.md` §3-1) |
 | 2호기 담당 코드 | 이 리포지토리의 `pi2_detector` 사용, `drive_ver3`의 `vision_stop_detector.py`는 미사용 | §7-2 참고 — 중복 구현 확인 후 결정 |
+| 제스처(손동작) 인식 | **2026-08-23: 잠정 비활성화**. `pi2_detector/config.py`에 `GESTURE_RECOGNITION_ENABLED = False` 플래그 추가, `detector.py`는 이 플래그가 꺼져 있으면 `gesture_recognizer` 모듈 자체를 import하지 않음 | 2호기 실기(Cortex-A72, AES 명령어 미지원)에서 공식 mediapipe 패키지의 `GestureRecognizer.create_from_options()`가 SIGILL로 크래시함(`features/mediapipe/design/README.md` §4-5). 자체 우회 파이프라인(§4-7~4-11)은 프로토타입 검증까지는 성공했으나 아직 `detector.py`에 통합 전이라, 그동안은 표지판 인식만 단독 배포 |
+| PC(central 서버) 고정 IP | **2026-08-23 확정**: `192.168.2.175`. `gesture_config.py`의 `DASHBOARD_URL`도 이 값으로 교체 완료 | `features/image_transfer/design/README.md` §8과 동일 결정 — 개발자 노트북이 아니라 이 IP의 PC 한 대가 `pc_server`+`web_dashboard`를 함께 호스팅 |
 
 ### 아직 안 정한 것
 - [x] **해결 (2026-08-22)**: `POST /vehicle-state`를 호출해줄 주체가 없던 문제 — `detector.py`에 `poll_driving_state()` 스레드 추가, `dashboard_client.get_status()`로 PC `web_dashboard`의 `GET /api/control/status`를 1초 주기 폴링해 `vehicle_state`를 직접 갱신. GPIO27 방식은 GPIO 자체가 폐기(점퍼케이블 불가, `mediapipe/design/README.md` §3-1)되어 미채택. 기존 push용 `/vehicle-state` 엔드포인트는 수동 테스트 편의로 유지

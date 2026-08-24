@@ -2,13 +2,26 @@
 # 값 대부분은 실측 전 TODO — design/README.md §8 "아직 안 정한 것" 참고
 
 # --- 카메라 ---
-SIDE_CAMERA_INDEX = 1  # TODO: 실제 측면 카메라의 /dev/videoN 인덱스로 교체 (작물 카메라와 다른 장치)
-# 2026-08-22: 작물 카메라(index 0)를 임시로 빌려 2호기 실기에서 GPIO 하드웨어 검증 완료 (design/README.md §7 참고)
+# 2026-08-24: 2호기 실기에 물리 카메라가 1대(HD Pro Webcam C920)뿐인 것으로 확인됨.
+# /dev/video0, /dev/video1은 별개 카메라가 아니라 그 웹캠 하나가 만드는 두 디바이스 노드라서,
+# image_transfer(capture.py)와 stop_sign이 각자 cv2.VideoCapture로 직접 열면 충돌함
+# (동시 사용 시 한쪽만 정상 동작하는 버그의 원인). 그래서 카메라는 image_transfer의
+# capture.py 프로세스 하나만 열고, stop_sign은 그 프로세스가 이미 갖고 있는 최신 프레임을
+# HTTP로 받아오는 방식으로 전환함. 실제 측면 전용 카메라가 나중에 배선되면
+# cv2.VideoCapture(그 인덱스)로 직접 여는 방식으로 되돌리면 됨.
+CAPTURE_SERVICE_URL = "http://127.0.0.1:8002/latest-frame"
+CAPTURE_SERVICE_TIMEOUT_SEC = 2.0
 
 # --- 인식 모델 ---
 MODEL_PATH = "yolov8n.pt"  # 사전학습 COCO 가중치, 파인튜닝 없이 사용 (design/README.md §7 검증 결과)
 STOP_SIGN_CLASS_ID = 11  # COCO 클래스 목록 기준 "stop sign"
 CONFIDENCE_THRESHOLD = 0.5  # TODO: 실측으로 조정 (design/README.md §8)
+
+# Pi 4는 GPU 가속 없이 CPU로만 추론해서 프레임당 처리 시간이 길고, 그게 디바운스(N/M)
+# 프레임 수만큼 곱해져서 정지 반응이 느리게 느껴지는 문제가 있었음. 추론 입력 해상도를
+# 낮추면(원본 프레임은 그대로 두고 YOLO에 넘길 때만 축소) 정확도 손해를 어느 정도
+# 감수하고 속도를 크게 올릴 수 있음 — TODO: 320 기준으로 반응속도/원거리 인식률 실측 후 조정
+INFERENCE_IMGSZ = 320  # ultralytics 기본값은 640 — 절반으로 줄이면 추론이 훨씬 빨라짐
 
 # --- 디바운스 (신호가 프레임 노이즈로 깜빡이지 않게, §3) ---
 DEBOUNCE_N = 3  # TODO: 연속 탐지 몇 프레임이면 HIGH로 확정할지, 실측 후 조정

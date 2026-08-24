@@ -10,10 +10,13 @@
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 import cv2
+import numpy as np
 import uvicorn
 from ultralytics import YOLO
 
@@ -61,8 +64,24 @@ def run_state_api() -> None:
     uvicorn.run(app, host=config.API_HOST, port=config.API_PORT, log_level="warning")
 
 
+def fetch_frame():
+    """카메라를 직접 열지 않고, image_transfer의 capture.py가 이미 들고 있는 최신
+    프레임을 로컬 HTTP로 받아온다 (물리 카메라 1대를 두 기능이 공유, config.py 참고).
+    실패 시 None을 반환 — 기존 camera.read() 실패(ok=False)와 동일하게 다룬다.
+    """
+    try:
+        with urllib.request.urlopen(
+            config.CAPTURE_SERVICE_URL, timeout=config.CAPTURE_SERVICE_TIMEOUT_SEC
+        ) as response:
+            data = response.read()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+    frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+    return frame
+
+
 def detect_stop_sign(model: YOLO, frame) -> bool:
-    result = model(frame, verbose=False)[0]
+    result = model(frame, imgsz=config.INFERENCE_IMGSZ, verbose=False)[0]
     for box in result.boxes:
         if (
             int(box.cls[0]) == config.STOP_SIGN_CLASS_ID
@@ -83,10 +102,6 @@ def main() -> None:
     controller = GestureController(dashboard_client)
     gesture_recognizer = GestureRecognizerWrapper() if config.GESTURE_RECOGNITION_ENABLED else None
 
-    camera = cv2.VideoCapture(config.SIDE_CAMERA_INDEX)
-    if not camera.isOpened():
-        raise RuntimeError(f"측면 카메라(index={config.SIDE_CAMERA_INDEX})를 열 수 없습니다")
-
     controller.start_heartbeat()
 
     detect_streak = 0
@@ -97,7 +112,14 @@ def main() -> None:
     cooldown_logged = False  # 쿨다운 중 억제 로그를 한 번만 찍기 위한 플래그
     start_time = time.monotonic()
 
-    print(f"[{_ts()}] [detector] 시작 — camera={config.SIDE_CAMERA_INDEX}, "
+    # 정지 반응 지연 진단용 — 프레임당 처리 시간을 주기적으로 평균 내서 로그 (INFERENCE_IMGSZ
+    # 등 튜닝 효과를 실측으로 확인하기 위함, 매 프레임 찍으면 로그가 너무 많아져서 30프레임마다)
+    frame_time_sum = 0.0
+    frame_time_count = 0
+    loop_prev_ts = time.monotonic()
+
+    print(f"[{_ts()}] [detector] 시작 — 카메라는 image_transfer의 capture.py가 소유, "
+          f"프레임은 {config.CAPTURE_SERVICE_URL}에서 받아옴, "
           f"driving 상태는 {gesture_config.DASHBOARD_URL}/api/control/status 폴링으로 판단 "
           f"({config.DRIVING_STATE_POLL_INTERVAL_S}s 주기), "
           f"state_api=http://{config.API_HOST}:{config.API_PORT}/vehicle-state(수동 테스트용, 병행 유지)")
@@ -114,12 +136,23 @@ def main() -> None:
                 time.sleep(0.2)
                 continue
 
-            ok, frame = camera.read()
-            if not ok:
+            frame = fetch_frame()
+            if frame is None:
                 continue
 
             # --- 표지판 인식 (기존 로직, GPIO 대신 controller에 위임) ---
             sign_detected = detect_stop_sign(model, frame)
+
+            now_ts = time.monotonic()
+            frame_time_sum += now_ts - loop_prev_ts
+            frame_time_count += 1
+            loop_prev_ts = now_ts
+            if frame_time_count >= 30:
+                avg_ms = (frame_time_sum / frame_time_count) * 1000
+                print(f"[{_ts()}] [detector] 최근 {frame_time_count}프레임 평균 처리시간 {avg_ms:.0f}ms/frame "
+                      f"(imgsz={config.INFERENCE_IMGSZ}, N={config.DEBOUNCE_N}이면 정지확정까지 약 {avg_ms * config.DEBOUNCE_N:.0f}ms)")
+                frame_time_sum = 0.0
+                frame_time_count = 0
 
             if not sign_is_stopped:
                 detect_streak = detect_streak + 1 if sign_detected else 0
@@ -154,7 +187,6 @@ def main() -> None:
         controller.stop_heartbeat()
         if gesture_recognizer is not None:
             gesture_recognizer.close()
-        camera.release()
 
 
 if __name__ == "__main__":
