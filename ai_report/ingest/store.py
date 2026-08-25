@@ -306,7 +306,7 @@ class Store:
         rows = self._conn.execute(
             """
             SELECT image_id, captured_at_ms, image_path, image_quality, detections
-            FROM analysis WHERE patrol_id = ? ORDER BY captured_at_ms
+            FROM analysis WHERE patrol_id = ? ORDER BY captured_at_ms, image_id
             """,
             (patrol_id,),
         ).fetchall()

@@ -93,6 +93,10 @@ def create_app(
         web_config.AI_REPORT_EVENT_URL,
         timeout_s=web_config.AI_REPORT_EVENT_TIMEOUT_S,
         auto_classify_enabled=web_config.AUTO_CLASSIFY_ENABLED,
+        # On STOP, pull whatever is still sitting on the webcam Pi before
+        # classifying -- otherwise classification runs against images that
+        # have not arrived yet. See PatrolEventService._pull_pending_images.
+        transfer_images=vision.transfer,
     )
 
     templates = Environment(

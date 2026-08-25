@@ -71,7 +71,31 @@ def _make_patrol_end_trigger(store: Store, settings: Settings) -> tuple[Callable
         triggered_patrol_ids.add(patrol_id)
         task = asyncio.create_task(run_patrol_pipeline(patrol_id, store, settings))
         background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
+
+        def _done(finished: asyncio.Task) -> None:
+            """Release the dedup claim when the run did not produce a report.
+
+            Holding the claim forever made every failure permanent: a patrol
+            whose pipeline returned None (VIS produced nothing, an analysis
+            file was unreadable, the LLM key was missing) could never be
+            retried by re-posting `PATROL_END`, and the only recovery was
+            restarting `serve`. The claim still stands for a *successful*
+            run, which is what stops a UDP-fallback re-delivery from
+            double-spending an LLM call -- the reason the dedup exists.
+            """
+            background_tasks.discard(finished)
+            try:
+                produced = finished.cancelled() is False and finished.result() is not None
+            except Exception:  # noqa: BLE001 - run_patrol_pipeline swallows its own
+                produced = False
+            if not produced:
+                triggered_patrol_ids.discard(patrol_id)
+                logger.info(
+                    "patrol_id=%s produced no report; re-delivery may trigger it again",
+                    patrol_id,
+                )
+
+        task.add_done_callback(_done)
 
     return trigger, background_tasks
 

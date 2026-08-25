@@ -79,14 +79,37 @@ class VisWatcher:
         if not analysis_dir.is_dir():
             return ScanResult(new_records=0, complete=False)
 
+        # Read the marker *before* the glob, never after. classify.py writes
+        # every analysis file and only then touches `_COMPLETE`; checking the
+        # marker last means a scan that globbed mid-run, then found the marker
+        # set moments later, would report `complete=True` while silently
+        # missing every file written in between. Checking first is the safe
+        # order: at worst the marker is missed on this pass and the loop scans
+        # once more.
+        complete = (analysis_dir / _COMPLETE_MARKER).exists()
+
         new_records = 0
         for path in sorted(analysis_dir.glob("*.json")):
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                # A file caught mid-write. classify.py now writes atomically
+                # (temp file + os.replace) so this should not happen, but a
+                # transient parse failure must not be fatal: `scan_once`'s
+                # exceptions abort the entire report via
+                # `orchestration.py::run_patrol_pipeline`'s broad `except`,
+                # and `cli.py`'s trigger dedup then blocks any retry. Skipping
+                # costs one more poll; raising costs the patrol.
+                logger.warning("skipping unreadable analysis file %s this pass", path)
+                complete = False
+                continue
+            # A ValidationError, by contrast, is deliberately left to
+            # propagate: an unknown VIS `state` is a contract violation the
+            # ICD says must be surfaced, not silently dropped (spec §12).
             result = AnalysisResult.model_validate(raw)
             if self._store.insert_analysis(result):
                 new_records += 1
 
-        complete = (analysis_dir / _COMPLETE_MARKER).exists()
         return ScanResult(new_records=new_records, complete=complete)
 
     async def watch(self, patrol_id: str, timeout_s: float | None = None) -> ScanResult:

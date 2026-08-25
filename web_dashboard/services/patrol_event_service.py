@@ -22,7 +22,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from ai_report.models import EventMessage, EventType
@@ -56,10 +57,16 @@ class PatrolEventService:
         auto_classify_enabled: bool = True,
         received_root: Path | None = None,
         log_dir: Path | None = None,
+        transfer_images: Callable[[], dict] | None = None,
     ) -> None:
         self._event_url = event_url.strip() if event_url else None
         self._timeout_s = timeout_s
         self._auto_classify_enabled = auto_classify_enabled
+        # Injected rather than constructed here so this service keeps no hard
+        # dependency on VisionCaptureService (and so tests can drive the
+        # ordering without a VIS server). `app.py` passes
+        # `VisionCaptureService.transfer`.
+        self._transfer_images = transfer_images
         # Overridable so tests can point these at a tmp_path instead of the
         # real repo's received/ and logs/ directories -- see
         # _trigger_classification, which would otherwise spawn a real
@@ -70,6 +77,13 @@ class PatrolEventService:
         self._lock = threading.Lock()
         self._active_patrol_id: str | None = None
         self._active_patrol_started_ms: int | None = None
+        self._last_patrol_id: str | None = None
+        # Monotonic for the life of the process, never reset per patrol.
+        # Resetting it meant a second patrol in the same minute -- same
+        # patrol_id -- re-posted event_seq=0, which `Store.insert_event`
+        # dedups on (patrol_id, event_seq). Its PATROL_END was therefore
+        # dropped as a duplicate and `event_api.py` never fired
+        # `on_patrol_end`, so that patrol got no report at all.
         self._next_seq = 0
 
     @property
@@ -82,19 +96,42 @@ class PatrolEventService:
             return self._active_patrol_id
 
     def start_patrol(self) -> str | None:
-        """Generate a fresh `patrol_id` (UTC `YYYYMMDD_HHMM`, matching
-        `devtools/fake_rover.py::main`'s own convention) and post
+        """Generate a fresh `patrol_id` (local `YYYYMMDD_HHMM`) and post
         `PATROL_START`. Returns the new `patrol_id`, or `None` if not
         configured. Called by `app.py`'s `start_rover`, after
         `RoverControlService.send` has already returned successfully.
+
+        Local time, not UTC. The patrol_id is not just an identifier:
+        `ai_report/pipeline/aggregate.py::_patrol_date` slices the report's
+        own date straight out of its `YYYYMMDD` prefix, and it names the
+        report directory an operator browses. Everything it has to line up
+        with is local — `capture.py` stamps filenames with `datetime.now()`,
+        `_trigger_classification` reads `received/{local date}/`. Minting it
+        in UTC put a KST operator's 17:32 patrol in `20260824_0832` and, for
+        anything before 09:00, dated the report to the previous day.
         """
         if not self.configured:
             return None
         with self._lock:
-            patrol_id = datetime.now(UTC).strftime("%Y%m%d_%H%M")
+            # DTZ005 is suppressed deliberately: local time is the point here,
+            # not an oversight -- see the docstring above.
+            patrol_id = datetime.now().strftime("%Y%m%d_%H%M")  # noqa: DTZ005
+            if patrol_id == self._last_patrol_id:
+                # C3's schema fixes patrol_id at YYYYMMDD_HHMM (13 chars), so
+                # two patrols inside one minute genuinely cannot be told
+                # apart: they share a report directory, an images/ directory
+                # and an analysis/ directory. Nothing here can prevent that
+                # without breaking the contract, so make it loud rather than
+                # silent -- the previous patrol's report is about to be
+                # replaced by this one's.
+                logger.warning(
+                    "patrol_id=%s reuses the previous patrol's id (same minute); "
+                    "its report and analysis output will be overwritten",
+                    patrol_id,
+                )
             self._active_patrol_id = patrol_id
+            self._last_patrol_id = patrol_id
             self._active_patrol_started_ms = int(time.time() * 1000)
-            self._next_seq = 0
             self._post(patrol_id, EventType.PATROL_START)
             return patrol_id
 
@@ -157,35 +194,104 @@ class PatrolEventService:
             return False
 
     def _trigger_classification(self, patrol_id: str, started_ms: int | None, ended_ms: int) -> None:
-        """Fire-and-forget `python -m vision.image_analysis.system.classify`
-        against this patrol's own images.
+        """Pull this patrol's images off the Pi, then classify them — on a
+        background thread, so STOP returns immediately.
+
+        The transfer has to happen first and has to be waited for. Images
+        live on the webcam Pi until something calls its `/trigger-upload`,
+        and nothing in the STOP path used to do that: classification ran
+        against whatever happened to be in `received/{today}/` already, which
+        for this patrol was nothing. Every auto-triggered run in `logs/`
+        recorded `classified 0/0 image(s)`, and every resulting report had
+        zero zones.
+
+        Threaded rather than inline because `VisionCaptureService.transfer`
+        blocks until the Pi has finished uploading every pending frame — up
+        to its own 35s timeout — and the STOP button must not wait on that.
+        `ai_report` is already polling for `_COMPLETE` by this point (the
+        `PATROL_END` post above started its `VIS_COMPLETE_TIMEOUT_S` clock),
+        so transfer and classification both have to fit inside that budget;
+        see `config.py`'s note on how it is sized.
+
+        Never raises: this runs detached, and a transfer or spawn failure
+        must not disturb a STOP the rover has already executed.
+        """
+        thread = threading.Thread(
+            target=self._transfer_then_classify,
+            args=(patrol_id, started_ms, ended_ms),
+            name=f"auto-classify-{patrol_id}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _transfer_then_classify(self, patrol_id: str, started_ms: int | None, ended_ms: int) -> None:
+        """Body of `_trigger_classification`, run on its own thread."""
+        self._pull_pending_images(patrol_id)
+        self._spawn_classify(patrol_id, started_ms, ended_ms)
+
+    def _pull_pending_images(self, patrol_id: str) -> None:
+        """Ask VIS to upload everything still pending on the Pi, and wait.
+
+        Best-effort: if no transfer callable was injected, or the Pi is
+        unreachable, classification still runs against whatever already
+        landed. Logging the outcome matters because "0 images classified" is
+        otherwise indistinguishable between "nothing was captured" and "the
+        transfer never happened".
+        """
+        if self._transfer_images is None:
+            logger.info(
+                "auto-classify for patrol_id=%s: no transfer hook configured, "
+                "classifying only images already received",
+                patrol_id,
+            )
+            return
+        try:
+            result = self._transfer_images()
+        except Exception as exc:  # noqa: BLE001 - VIS errors must not escape a detached thread
+            logger.warning(
+                "image transfer failed before classifying patrol_id=%s: %s; "
+                "proceeding with images already received",
+                patrol_id, exc,
+            )
+            return
+        logger.info(
+            "image transfer for patrol_id=%s: requested=%s success=%s failed=%s",
+            patrol_id,
+            result.get("requested") if isinstance(result, dict) else None,
+            result.get("success") if isinstance(result, dict) else None,
+            result.get("failed") if isinstance(result, dict) else None,
+        )
+
+    def _spawn_classify(self, patrol_id: str, started_ms: int | None, ended_ms: int) -> None:
+        """Fire-and-forget `python -m vision.image_analysis.system.classify`.
 
         `source_dir` is today's `received/{YYYY-MM-DD}/` directory (the
         vision PC server's own layout, `pc_server/routes_upload.py`'s
-        `day_dir_from_filename`) -- shared by every patrol that ran today,
-        which is exactly why `--after-ts-ms`/`--before-ts-ms` (this
-        patrol's own START/END epoch-ms) are passed: they scope
-        classification to just this patrol's images by file mtime, even
-        though they all live in the same folder. Does not handle a patrol
-        that spans midnight (rare for a short patrol; the images would fall
-        in yesterday's folder and be missed) -- not worth the complexity
-        for that edge case.
+        `day_dir_from_filename`), shared by every patrol that ran today.
 
-        Never raises and never blocks the caller: `Popen` returns as soon as
-        the subprocess is spawned, and any failure inside classify.py itself
-        (bad API key, network error, zero images) only ever reaches its own
-        log file, exactly like a manual run would.
+        No `--after-ts-ms`/`--before-ts-ms` is passed. Scoping by the drive
+        window was wrong on this system: `INTEGRATION_RUNBOOK.md` states that
+        camera capture is independent of vehicle control, so the frames a
+        patrol should report on are simply the ones that had not been
+        classified yet, not the ones whose capture time happens to fall
+        between START and STOP. classify.py's ledger enforces that instead
+        (see `classify_patrol`), which also makes a re-run pick up exactly
+        what a late transfer added. `started_ms`/`ended_ms` are kept in the
+        signature and logged, because they remain the honest record of when
+        the patrol actually ran.
+
+        Does not handle a patrol that spans midnight (rare for a short
+        patrol; the images would fall in yesterday's folder and be missed).
+
+        Never raises and never blocks: `Popen` returns as soon as the
+        subprocess is spawned, and any failure inside classify.py itself only
+        ever reaches its own log file.
         """
         source_dir = self._received_root / datetime.now().strftime("%Y-%m-%d")
         if not source_dir.is_dir():
             logger.warning(
                 "auto-classify skipped for patrol_id=%s: %s does not exist yet",
                 patrol_id, source_dir,
-            )
-            return
-        if started_ms is None:
-            logger.warning(
-                "auto-classify skipped for patrol_id=%s: no recorded start time", patrol_id
             )
             return
 
@@ -198,8 +304,6 @@ class PatrolEventService:
                         sys.executable, "-m", "vision.image_analysis.system.classify",
                         "--patrol-id", patrol_id,
                         "--source-dir", str(source_dir),
-                        "--after-ts-ms", str(started_ms),
-                        "--before-ts-ms", str(ended_ms),
                     ],
                     cwd=str(_REPO_ROOT),
                     stdout=log_file,
@@ -207,8 +311,8 @@ class PatrolEventService:
                     start_new_session=True,
                 )
             logger.info(
-                "auto-classify started for patrol_id=%s (source=%s, log=%s)",
-                patrol_id, source_dir, log_path,
+                "auto-classify started for patrol_id=%s (source=%s, log=%s, patrol ran %s-%s)",
+                patrol_id, source_dir, log_path, started_ms, ended_ms,
             )
         except OSError as exc:
             logger.warning("failed to start auto-classify for patrol_id=%s: %s", patrol_id, exc)

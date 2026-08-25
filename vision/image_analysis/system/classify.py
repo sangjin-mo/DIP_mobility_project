@@ -25,7 +25,7 @@ This script fills exactly that gap, and only that gap:
   `01-interface-contracts.md` §C2.2 / `contracts/schemas/c2-analysis.schema.json`
   define).
 
-Produces, for every `*.jpg`/`*.jpeg` in `--source-dir`:
+Produces, for every not-yet-classified `*.jpg`/`*.jpeg` in `--source-dir`:
 - `{data_root}/images/{patrol_id}/{image_id}.jpg` (C2.1's required raw-image
   location)
 - `{data_root}/analysis/{patrol_id}/{image_id}.json` (one `AnalysisResult`
@@ -46,6 +46,12 @@ single most correctness-critical piece of the whole AI subsystem per
 GUIDELINES.md hard rule 4) — so this script requires a human or an upstream
 caller to say which patrol a batch of images belongs to, the same way
 `devtools/fake_vis.py --patrol-id` does.
+
+Which images belong to that patrol is decided by a ledger of what has
+already been classified, not by the patrol's own START/STOP window — see
+`classify_patrol` for why the window filter was the wrong question on this
+system. Re-running is idempotent: `image_id` is derived from the source
+filename, so the same picture always lands under the same id.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import shutil
 import sys
@@ -72,34 +79,40 @@ logger = logging.getLogger(__name__)
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg")
 
-# How many images may be in flight at once. Classification is one vision call
-# per image and `capture.py` saves ~1 image/sec while the rover is RUNNING, so
-# a one-minute patrol is ~60 calls; sequentially that is minutes of wall clock
-# and it lands directly in the gap between STOP and the report being ready
-# (ADR-0010). 8 keeps that well under `VIS_COMPLETE_TIMEOUT_S` without being
-# aggressive enough to trip per-minute request limits on a small account.
-DEFAULT_CONCURRENCY = 8
+# Name of the cross-patrol ledger that records which source files have already
+# been classified, so a re-run picks up only what is new (see `_load_ledger`).
+LEDGER_NAME = ".classified.json"
 
 # `capture.py::make_filename` names every frame `YYYYMMDD_HHMMSS_{cam}_{seq}.jpg`
 # in the Pi's local time. That name is the only surviving record of when a frame
-# was actually taken: `pc_server/routes_upload.py` writes uploads with a plain
-# `open(...).write(...)`, so every file in one transfer batch ends up with the
-# same mtime -- the moment it landed on the PC, often minutes after capture and
-# after the patrol already ended.
-_CAPTURE_NAME_RE = re.compile(r"^(?P<stamp>\d{8}_\d{6})_")
+# was actually taken: `pc_server/routes_upload.py` used to write uploads with a
+# plain `open(...).write(...)`, giving every file in one transfer batch the same
+# mtime -- the moment it landed on the PC, often minutes after capture. That
+# route now restores the capture time with `os.utime`, but this parse stays the
+# primary source: it is correct even for files uploaded before that fix.
+#
+# `seq` matters as well as `stamp`. `capture.py::next_filepath` deliberately
+# supports several frames inside one second (seq 001, 002, ...) and the
+# dashboard can drive the interval down to MIN_CAPTURE_INTERVAL_SEC = 0.2, so
+# the second-resolution stamp alone is not a unique -- or even an ordering --
+# key. `capture_sort_key` pairs the two; `capture_ts_ms` remains
+# second-resolution because that is genuinely all the filename records, and
+# inventing sub-second precision would be fabricating data.
+_CAPTURE_NAME_RE = re.compile(r"^(?P<stamp>\d{8}_\d{6})_(?P<cam>[^_]+)_(?P<seq>\d+)")
 
 
 def capture_ts_ms(path: Path) -> int:
     """Epoch-ms this frame was captured, read from its filename.
 
     Falls back to mtime for any name that doesn't carry a stamp (a
-    hand-dropped file, a different camera's convention), which is the old
-    behaviour and still better than refusing to classify the image.
+    hand-dropped file, a different camera's convention), which is still
+    better than refusing to classify the image.
 
     The stamp has no timezone, so it is interpreted in this machine's local
     time -- correct as long as the Pi and the PC agree on a timezone, which
-    they do today (both KST). A mismatch would shift `captured_at_ms` and the
-    patrol window filter by the offset.
+    they do today (both KST). `check_timezone_alignment` logs a warning when
+    the parsed capture time lands implausibly far from the file's own mtime,
+    which is what a Pi/PC timezone mismatch looks like from here.
     """
     match = _CAPTURE_NAME_RE.match(path.name)
     if match is None:
@@ -111,6 +124,74 @@ def capture_ts_ms(path: Path) -> int:
         logger.warning("unparseable capture stamp in %s; falling back to mtime", path.name)
         return int(path.stat().st_mtime * 1000)
     return int(parsed.timestamp() * 1000)
+
+
+def capture_sort_key(path: Path) -> tuple[int, int, str]:
+    """Total order over one patrol's frames: capture second, then capture
+    sequence within that second, then filename as a final tiebreak.
+
+    Sorting on `capture_ts_ms` alone is ambiguous for frames saved inside the
+    same second, which `capture.py` produces routinely at any interval below
+    1.0s. An ambiguous order would make `image_id` assignment -- and therefore
+    the whole report -- non-deterministic, which GUIDELINES.md hard rule 2
+    forbids. Called by `classify_patrol` when ordering `sources`.
+    """
+    match = _CAPTURE_NAME_RE.match(path.name)
+    seq = int(match.group("seq")) if match else 0
+    return (capture_ts_ms(path), seq, path.name)
+
+
+# A frame cannot have been captured meaningfully *after* the file holding it
+# was written, so a positive skew that large is not a slow upload -- it is a
+# clock or timezone disagreement. Only that direction is checked: a capture
+# time long *before* the mtime is the normal case (the image sat on the Pi
+# until someone triggered a transfer), so it says nothing either way. A few
+# minutes of slack absorbs ordinary clock drift between the two machines.
+_TZ_SKEW_WARN_MS = 5 * 60 * 1000
+
+
+def check_timezone_alignment(sources: list[Path], capture_times: list[int]) -> None:
+    """Warn when a parsed capture time sits implausibly *after* its file's mtime.
+
+    `capture_ts_ms` resolves the Pi's naive filename stamp against *this*
+    machine's timezone. Run the dashboard on a UTC host while the Pi writes
+    KST names and every capture time shifts by hours -- previously a silent
+    wrong answer that just looked like "no images found". Purely advisory: it
+    logs once and never raises. Called by `classify_patrol` once per run.
+    """
+    for src, captured_ms in zip(sources, capture_times):
+        try:
+            mtime_ms = int(src.stat().st_mtime * 1000)
+        except OSError:
+            continue
+        skew_ms = captured_ms - mtime_ms
+        if skew_ms > _TZ_SKEW_WARN_MS:
+            logger.warning(
+                "capture time parsed from %s is %.1fh later than the file was written; "
+                "check that this machine and the capture Pi share a timezone",
+                src.name, skew_ms / 3_600_000,
+            )
+            return
+
+
+def image_id_for(patrol_id: str, source: Path) -> str:
+    """Stable `image_id` for one source file within one patrol.
+
+    Derived from the source filename, not from its position in a sorted list.
+    Positional ids (`{patrol_id}_{index:03d}`) are only stable while the input
+    set is, so re-running after more frames arrived silently rebound every id
+    to a different picture -- and `Store.insert_analysis`'s `INSERT OR IGNORE`
+    on `(patrol_id, image_id)` then kept the *stale* row while
+    `shutil.copyfile` overwrote the image on disk. A filename-derived id makes
+    re-runs idempotent instead. Nothing in `ai_report` parses `image_id`; it is
+    an opaque key (`devtools/fake_vis.py` already uses a different scheme
+    entirely), so its shape is free.
+
+    Non-alphanumerics are collapsed to `_` to satisfy
+    `web_dashboard/services/report_service.py`'s `_IMAGE_ID_PATTERN`.
+    """
+    stem = re.sub(r"[^A-Za-z0-9_-]", "_", source.stem)
+    return f"{patrol_id}_{stem}"
 
 SYSTEM_PROMPT = (
     "당신은 온실 작물 순찰 사진 한 장을 분석하는 시스템입니다. "
@@ -141,14 +222,99 @@ class ImageClassification(BaseModel):
     detections: list[Detection]
 
 
+# JSON Schema validation keywords that OpenAI's strict structured-output mode
+# does not accept. Pydantic emits them for any `Field(ge=..., le=...)`, which
+# `Detection.count`/`confidence` and `ImageClassification.image_quality` all
+# use. `ai_report/llm/schema.py`'s own report schema never hit this because
+# `LlmReportOutput` deliberately has no numeric field anywhere; this schema
+# does, and an unsupported keyword is a 400 on *every* image -- which
+# `classify_one` would log as an ordinary per-image skip, making a total
+# failure look like an empty patrol.
+#
+# Dropping them costs nothing: the response is parsed back through
+# `ImageClassification.model_validate_json`, so Pydantic still enforces every
+# bound. The schema only has to describe the shape well enough for the model.
+_STRICT_UNSUPPORTED_KEYWORDS = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
+
+
+def _strip_unsupported_keywords(schema: dict) -> dict:
+    """Recursively remove `_STRICT_UNSUPPORTED_KEYWORDS` from a schema dict.
+
+    Walks `properties`, `items`, `$defs`/`definitions` and the `anyOf`/`allOf`/
+    `oneOf` branches -- `confidence: float | None` puts its bounds inside an
+    `anyOf` arm, which a properties-only walk would miss. Called by
+    `_classification_schema`.
+    """
+    for keyword in _STRICT_UNSUPPORTED_KEYWORDS:
+        schema.pop(keyword, None)
+    for key in ("properties", "$defs", "definitions"):
+        for sub_schema in schema.get(key, {}).values():
+            _strip_unsupported_keywords(sub_schema)
+    if "items" in schema:
+        _strip_unsupported_keywords(schema["items"])
+    for key in ("anyOf", "allOf", "oneOf"):
+        for sub_schema in schema.get(key, []):
+            _strip_unsupported_keywords(sub_schema)
+    return schema
+
+
 def _classification_schema() -> dict:
     """Strict JSON schema for the API's `response_format`, reusing the same
     `_make_strict` helper `ai_report/llm/schema.py::output_json_schema`
     uses — that function is generic (any Pydantic-generated schema dict in,
     same dict out), so there is nothing AI-report-specific about importing
     it here. Called by `classify_image`.
+
+    `_strip_unsupported_keywords` then removes the numeric bounds Pydantic
+    emits, which strict mode rejects — see that constant's comment.
     """
-    return _make_strict(ImageClassification.model_json_schema(by_alias=True))
+    return _strip_unsupported_keywords(
+        _make_strict(ImageClassification.model_json_schema(by_alias=True))
+    )
+
+
+def _load_ledger(path: Path) -> dict[str, dict]:
+    """Read the already-classified ledger, or `{}` if it doesn't exist yet.
+
+    Keys are `{day}/{filename}` relative paths into the shared `received/`
+    tree; values record which patrol claimed the file and under which
+    `image_id`. A corrupt ledger is treated as empty and logged rather than
+    raised on — losing the ledger costs a re-classification, while refusing to
+    start costs the patrol its whole report.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("could not read classification ledger at %s; treating as empty", path)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_ledger(path: Path, ledger: dict[str, dict]) -> None:
+    """Write the ledger atomically (temp file + `os.replace`).
+
+    Atomic because a concurrent classify run — or a crash mid-write — must
+    never leave a half-written ledger that `_load_ledger` then discards,
+    silently re-classifying (and re-billing) every image in the tree.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.warning("could not write classification ledger at %s: %s", path, exc)
+        tmp.unlink(missing_ok=True)
+
+
+def _ledger_key(source: Path) -> str:
+    """`{day}/{filename}` — how one source file is identified in the ledger.
+
+    Includes the day directory so two frames with the same name on different
+    days (a Pi whose clock reset, say) stay distinct entries.
+    """
+    return f"{source.parent.name}/{source.name}"
 
 
 class FrameContext(BaseModel):
@@ -246,42 +412,49 @@ async def classify_patrol(
     client: AsyncOpenAI | None = None,
     after_ts_ms: int | None = None,
     before_ts_ms: int | None = None,
-    concurrency: int = DEFAULT_CONCURRENCY,
+    concurrency: int | None = None,
+    use_ledger: bool = True,
 ) -> int:
-    """Classify every image in `source_dir`, writing C2-contract output
-    under `data_root`, then the `_COMPLETE` marker.
+    """Classify every unclassified image in `source_dir`, writing C2-contract
+    output under `data_root`, then the `_COMPLETE` marker.
 
-    `image_id` is `{patrol_id}_{index:03d}` in filename-sorted order —
-    zone assignment doesn't happen here (that's
-    `pipeline/segment.py::segment_patrol`'s job, driven by
-    `captured_at_ms`, not by anything encoded in `image_id`), so no zone
-    label is needed at classification time.
+    **Which images.** By default every `*.jpg`/`*.jpeg` in `source_dir` that
+    the ledger (`{data_root}/analysis/.classified.json`) has not already
+    recorded. This deliberately replaced a filter on the patrol's own
+    START/STOP window: on this system the camera runs independently of the
+    drive (`web_dashboard/INTEGRATION_RUNBOOK.md` says so outright) and images
+    reach the PC only when someone triggers a transfer, so the drive window
+    and the capture window routinely do not overlap at all. Scoping by "what
+    have we not done yet" matches how the images actually arrive, and the
+    ledger is what keeps that affordable — without it every patrol would
+    re-classify, and re-bill, the whole day's directory.
+
+    `after_ts_ms`/`before_ts_ms` (both inclusive, both optional) still narrow
+    the set by *capture* time — read from the filename by `capture_ts_ms`, not
+    from mtime, which records when the file landed on the PC rather than when
+    it was taken. They are for manual runs that need to re-examine a specific
+    span; the automatic STOP-triggered run passes neither.
+
+    **Idempotence.** `image_id` comes from `image_id_for` (filename-derived),
+    so re-running is safe: the same picture always gets the same id, and
+    `Store.insert_analysis`'s `INSERT OR IGNORE` therefore updates nothing
+    rather than binding a stale row to a rewritten image.
 
     `client` is injectable so tests never construct a real `AsyncOpenAI`
     (mirrors `ai_report/llm/client.py::generate_report`'s own `client=`
     parameter and its "own_client" pattern exactly, including the same
     construct-inside-try / guard-the-finally fix that bug needed).
 
-    Always writes `_COMPLETE`, even if every image failed to classify —
-    `ai_report`'s spec §12 error matrix already handles "`_COMPLETE` never
-    written" as a 600s-timeout fallback, but there is no reason to make
-    `ai_report` wait out that timeout when this script already knows it is
-    done trying. A patrol with zero successfully classified images still
-    produces a text-only report on the `ai_report` side, same as any other
-    zero-detections case.
-
-    `after_ts_ms`/`before_ts_ms` (both inclusive, both optional) restrict
-    `source_dir` to files whose mtime falls in that window -- the same
-    epoch-ms clock `web_dashboard/services/patrol_event_service.py` stamps
-    its `PATROL_START`/`PATROL_END` events with. This is what lets a single
-    shared `received/{date}/` directory (holding every patrol's images for
-    that day) be classified one patrol at a time: `web_dashboard`'s STOP
-    handler passes this patrol's own start/end timestamps so images from a
-    different patrol earlier or later the same day are left alone. mtime
-    (not the capture-time embedded in the filename) is used deliberately --
-    it is already `captured_at_ms`'s own source of truth below, and using
-    the same field for both the filter and the stored value keeps them from
-    disagreeing with each other even by a few seconds.
+    **Always writes `_COMPLETE`** — from a `finally`, so it holds even when
+    the run dies before classifying anything (an unset `OPENAI_API_KEY` makes
+    `AsyncOpenAI(...)` raise; a vanished day directory makes `iterdir` raise).
+    Previously the marker sat after the `try` and those two paths skipped it
+    entirely, leaving `ai_report` to block for the whole
+    `VIS_COMPLETE_TIMEOUT_S` and then emit an empty report, with the traceback
+    visible only in this process's own detached log file. Any pre-existing
+    marker is cleared on entry for the same reason in reverse: a stale
+    `_COMPLETE` from an earlier run would let `VisWatcher` return before this
+    run has written anything.
 
     Returns the number of images successfully classified. Called by `main`
     and directly by tests.
@@ -289,61 +462,85 @@ async def classify_patrol(
     own_client = client is None
     images_dir = data_root / "images" / patrol_id
     analysis_dir = data_root / "analysis" / patrol_id
-    images_dir.mkdir(parents=True, exist_ok=True)
-    analysis_dir.mkdir(parents=True, exist_ok=True)
-
-    sources = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
-    if after_ts_ms is not None or before_ts_ms is not None:
-        # Capture time, not mtime: images are usually pulled off the Pi *after*
-        # STOP, so their mtime is later than this patrol's `before_ts_ms` and
-        # filtering on it silently discarded every frame.
-        sources = [
-            p for p in sources
-            if (after_ts_ms is None or capture_ts_ms(p) >= after_ts_ms)
-            and (before_ts_ms is None or capture_ts_ms(p) <= before_ts_ms)
-        ]
-    if not sources:
-        logger.warning("no images found in %s (after_ts_ms=%s, before_ts_ms=%s)",
-                        source_dir, after_ts_ms, before_ts_ms)
-
-    # One stat/parse per frame, done up front: `classify_one` needs both its
-    # own capture time and the gap to the previous frame, and `sources` is
-    # already sorted by name, which for capture.py's naming is chronological.
-    capture_times = [capture_ts_ms(p) for p in sources]
+    ledger_path = data_root / "analysis" / LEDGER_NAME
+    marker_path = analysis_dir / "_COMPLETE"
 
     classified = 0
     try:
+        images_dir.mkdir(parents=True, exist_ok=True)
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+
+        # A marker left by an earlier run for this patrol_id would let
+        # `VisWatcher.watch` return immediately, before this run writes a
+        # single analysis file.
+        marker_path.unlink(missing_ok=True)
+
+        sources = sorted(
+            (p for p in source_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES),
+            key=capture_sort_key,
+        )
+
+        # One parse per file, reused for the window filter, the sort above,
+        # `FrameContext`'s gap, and the stored `captured_at_ms`.
+        capture_times = {p: capture_ts_ms(p) for p in sources}
+        check_timezone_alignment(sources, [capture_times[p] for p in sources])
+
+        if after_ts_ms is not None or before_ts_ms is not None:
+            sources = [
+                p for p in sources
+                if (after_ts_ms is None or capture_times[p] >= after_ts_ms)
+                and (before_ts_ms is None or capture_times[p] <= before_ts_ms)
+            ]
+
+        ledger = _load_ledger(ledger_path) if use_ledger else {}
+        if ledger:
+            skipped = [p for p in sources if _ledger_key(p) in ledger]
+            if skipped:
+                logger.info("skipping %d image(s) already classified by a previous run", len(skipped))
+            sources = [p for p in sources if _ledger_key(p) not in ledger]
+
+        if not sources:
+            logger.warning(
+                "no unclassified images found in %s (after_ts_ms=%s, before_ts_ms=%s)",
+                source_dir, after_ts_ms, before_ts_ms,
+            )
+
         if own_client:
             client = AsyncOpenAI(api_key=get_settings().OPENAI_API_KEY, timeout=timeout_s)
 
-        # `image_id` is bound to the image's position in the sorted `sources`
-        # list before anything is dispatched, so it stays identical to what the
-        # old sequential loop produced regardless of the order calls complete
-        # in. `select_images.py` and the C2 fixtures depend on that numbering.
+        if concurrency is None:
+            concurrency = get_settings().CLASSIFY_CONCURRENCY
         semaphore = asyncio.Semaphore(max(1, concurrency))
+        total = len(sources)
+        ordered_times = [capture_times[p] for p in sources]
 
-        async def classify_one(index: int, src: Path) -> bool:
-            image_id = f"{patrol_id}_{index:03d}"
-            captured_ms = capture_times[index]
-            previous_ms = capture_times[index - 1] if index > 0 else None
+        async def classify_one(index: int, src: Path) -> str | None:
+            """Classify one frame; return its `image_id` on success, else None."""
+            image_id = image_id_for(patrol_id, src)
+            captured_ms = ordered_times[index]
+            previous_ms = ordered_times[index - 1] if index > 0 else None
             context = FrameContext(
                 index=index,
-                total=len(sources),
+                total=total,
                 captured_at_ms=captured_ms,
                 gap_s=None if previous_ms is None else (captured_ms - previous_ms) / 1000,
             )
             # Both the read and the call are inside the semaphore so that at
             # most `concurrency` images are held in memory at once -- a patrol
-            # can be hundreds of frames at 1 capture/sec.
+            # can be hundreds of frames at 1 capture/sec. Every filesystem
+            # call goes through `asyncio.to_thread`: they are blocking, and on
+            # the event loop they stall the other workers *and* the shared
+            # AsyncOpenAI transport, collapsing the concurrency this function
+            # exists to provide.
             async with semaphore:
-                image_bytes = src.read_bytes()
+                image_bytes = await asyncio.to_thread(src.read_bytes)
                 try:
                     result = await classify_image(client, image_bytes, model, timeout_s, context)
                 except Exception:
                     logger.exception("classification failed for %s; skipping this image", src)
-                    return False
+                    return None
 
-                shutil.copyfile(src, images_dir / f"{image_id}.jpg")
+                await asyncio.to_thread(shutil.copyfile, src, images_dir / f"{image_id}.jpg")
                 analysis = AnalysisResult(
                     image_id=image_id,
                     patrol_id=patrol_id,
@@ -352,12 +549,11 @@ async def classify_patrol(
                     image_quality=result.image_quality,
                     detections=result.detections,
                 )
-                (analysis_dir / f"{image_id}.json").write_text(
-                    json.dumps(analysis.model_dump(mode="json", by_alias=True), ensure_ascii=False, indent=2),
-                    encoding="utf-8",
+                await asyncio.to_thread(
+                    _write_analysis_atomically, analysis_dir / f"{image_id}.json", analysis
                 )
                 logger.info("classified %s -> %d detection(s)", src.name, len(result.detections))
-                return True
+                return image_id
 
         # return_exceptions=True keeps one unexpected failure (something
         # outside classify_image's own try, e.g. a disk error on write) from
@@ -372,16 +568,50 @@ async def classify_patrol(
                 logger.error("unexpected failure writing results for %s: %r", src, outcome)
             elif outcome:
                 classified += 1
+                ledger[_ledger_key(src)] = {"patrol_id": patrol_id, "image_id": outcome}
+
+        if use_ledger and classified:
+            _save_ledger(ledger_path, ledger)
     finally:
         if own_client and client is not None:
             await client.close()
+        # In a `finally` so a run that died before classifying anything still
+        # releases `ai_report` instead of making it wait out the full timeout.
+        try:
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            marker_path.touch()
+        except OSError as exc:
+            logger.error("could not write _COMPLETE marker for patrol_id=%s: %s", patrol_id, exc)
 
-    (analysis_dir / "_COMPLETE").touch()
     logger.info(
-        "patrol_id=%s: classified %d/%d image(s), wrote _COMPLETE",
-        patrol_id, classified, len(sources),
+        "patrol_id=%s: classified %d image(s), wrote _COMPLETE", patrol_id, classified
     )
     return classified
+
+
+def _write_analysis_atomically(dest: Path, analysis: AnalysisResult) -> None:
+    """Serialise one `AnalysisResult` to `dest` via a temp file + `os.replace`.
+
+    `ai_report.ingest.vis_watcher.VisWatcher.scan_once` globs this directory
+    roughly once a second while this function is still producing files. A
+    plain `write_text` truncates before it writes, so a scan landing inside
+    that window reads a partial file; `scan_once` deliberately does not catch
+    the resulting `JSONDecodeError`, and `run_patrol_pipeline`'s broad
+    `except` turns it into *no report at all*. `os.replace` is atomic on
+    POSIX, so a reader sees either the old file or the complete new one --
+    the same guarantee, and for the same reason, as
+    `ai_report/storage/layout.py::write_report`'s directory swap.
+
+    The temp file is written in `dest`'s own directory so the rename stays on
+    one filesystem, and is named with a leading dot so the `*.json` glob never
+    picks it up even mid-write.
+    """
+    tmp = dest.parent / f".{dest.name}.tmp"
+    tmp.write_text(
+        json.dumps(analysis.model_dump(mode="json", by_alias=True), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, dest)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -394,12 +624,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", default=None, type=Path, help="defaults to ai_report's configured DATA_ROOT")
     parser.add_argument("--model", default=None, help="defaults to ai_report's configured LLM_MODEL")
     parser.add_argument("--timeout-s", type=float, default=60.0)
-    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY,
-                         help=f"images classified in parallel (default {DEFAULT_CONCURRENCY}; 1 = sequential)")
+    parser.add_argument("--concurrency", type=int, default=None,
+                         help="images classified in parallel (default: ai_report's CLASSIFY_CONCURRENCY; 1 = sequential)")
     parser.add_argument("--after-ts-ms", type=int, default=None,
-                         help="only classify images with mtime >= this epoch-ms value")
+                         help="only classify images captured at or after this epoch-ms value")
     parser.add_argument("--before-ts-ms", type=int, default=None,
-                         help="only classify images with mtime <= this epoch-ms value")
+                         help="only classify images captured at or before this epoch-ms value")
+    parser.add_argument("--reclassify", action="store_true",
+                         help="ignore the already-classified ledger and re-run every matching image")
     return parser
 
 
@@ -420,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
         classify_patrol(
             args.patrol_id, args.source_dir, data_root, model, args.timeout_s,
             after_ts_ms=args.after_ts_ms, before_ts_ms=args.before_ts_ms,
-            concurrency=args.concurrency,
+            concurrency=args.concurrency, use_ledger=not args.reclassify,
         )
     )
     print(f"patrol_id={args.patrol_id} classified {classified} image(s) under {data_root}")

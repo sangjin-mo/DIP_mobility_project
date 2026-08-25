@@ -23,10 +23,16 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from PIL import Image
+from pydantic import ValidationError
 
 from ai_report.ingest.vis_watcher import VisWatcher
-from vision.image_analysis.system.classify import capture_ts_ms, classify_patrol
+from vision.image_analysis.system.classify import (
+    capture_ts_ms,
+    classify_patrol,
+    image_id_for,
+)
 
 PATROL_ID = "20260824_0900"
 _IMAGE_SIZE = (64, 48)
@@ -74,8 +80,9 @@ async def test_classifies_every_image_and_writes_complete_marker(tmp_path: Path)
     analysis_dir = data_root / "analysis" / PATROL_ID
     images_dir = data_root / "images" / PATROL_ID
     assert (analysis_dir / "_COMPLETE").is_file()
-    assert sorted(p.name for p in images_dir.iterdir()) == [f"{PATROL_ID}_000.jpg", f"{PATROL_ID}_001.jpg"]
-    assert sorted(p.name for p in analysis_dir.glob("*.json")) == [f"{PATROL_ID}_000.json", f"{PATROL_ID}_001.json"]
+    expected = sorted(image_id_for(PATROL_ID, source_dir / n) for n in ("a.jpg", "b.jpg"))
+    assert sorted(p.stem for p in images_dir.iterdir()) == expected
+    assert sorted(p.stem for p in analysis_dir.glob("*.json")) == expected
 
 
 async def test_output_round_trips_through_the_real_vis_watcher(tmp_path: Path, store):
@@ -97,7 +104,8 @@ async def test_output_round_trips_through_the_real_vis_watcher(tmp_path: Path, s
     assert result.complete is True
     assert store.analysis_count(PATROL_ID) == 1
     [analysis] = store.analysis_for_patrol(PATROL_ID)
-    assert analysis.image_path == f"images/{PATROL_ID}/{PATROL_ID}_000.jpg"
+    only_id = image_id_for(PATROL_ID, source_dir / "only.jpg")
+    assert analysis.image_path == f"images/{PATROL_ID}/{only_id}.jpg"
     assert [d.class_ for d in analysis.detections] == ["tomato", "tomato"]
 
 
@@ -110,12 +118,18 @@ async def test_one_bad_image_does_not_abort_the_batch(tmp_path: Path):
     # First call raises (simulated API failure on image "a"), second succeeds.
     client = _mock_client(side_effect=[RuntimeError("simulated outage"), _mock_classification_response()])
 
-    count = await classify_patrol(PATROL_ID, source_dir, data_root, model="gpt-5.6-luna", client=client)
+    # concurrency=1: `side_effect` is consumed in call order, and with several
+    # images in flight the file read inside the semaphore can interleave, so
+    # which image gets the failure would otherwise be a race. What is under
+    # test is that one failure does not abort the batch, not the ordering.
+    count = await classify_patrol(
+        PATROL_ID, source_dir, data_root, model="gpt-5.6-luna", client=client, concurrency=1
+    )
 
     assert count == 1  # only the second image made it through
     analysis_dir = data_root / "analysis" / PATROL_ID
     assert (analysis_dir / "_COMPLETE").is_file()  # still written despite the failure
-    assert [p.name for p in analysis_dir.glob("*.json")] == [f"{PATROL_ID}_001.json"]
+    assert [p.stem for p in analysis_dir.glob("*.json")] == [image_id_for(PATROL_ID, source_dir / "b.jpg")]
 
 
 async def test_writes_complete_marker_even_with_zero_source_images(tmp_path: Path):
@@ -130,9 +144,11 @@ async def test_writes_complete_marker_even_with_zero_source_images(tmp_path: Pat
 
 
 async def test_after_before_ts_ms_restricts_to_images_in_that_window(tmp_path: Path):
-    """A shared `received/{date}/` directory can hold more than one patrol's
-    images; `after_ts_ms`/`before_ts_ms` (web_dashboard's own recorded
-    START/END epoch-ms) must pick out only this patrol's own files by mtime.
+    """`after_ts_ms`/`before_ts_ms` remain available for manual runs that
+    need to re-examine one span of a shared `received/{date}/` directory.
+
+    These filenames carry no capture stamp, so `capture_ts_ms` falls back to
+    mtime -- which is what this test manipulates.
     """
     source_dir = tmp_path / "source"
     _write_fake_source_image(source_dir / "before.jpg", (200, 30, 30))
@@ -154,7 +170,7 @@ async def test_after_before_ts_ms_restricts_to_images_in_that_window(tmp_path: P
     analysis_dir = data_root / "analysis" / PATROL_ID
     [analysis_path] = analysis_dir.glob("*.json")
     analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
-    assert analysis["image_path"].endswith("_000.jpg")
+    assert analysis["image_path"].endswith(f"{image_id_for(PATROL_ID, source_dir / 'during.jpg')}.jpg")
 
 
 async def test_confidence_required_unless_undetermined_is_enforced(tmp_path: Path):
@@ -177,13 +193,19 @@ async def test_confidence_required_unless_undetermined_is_enforced(tmp_path: Pat
     assert (data_root / "analysis" / PATROL_ID / "_COMPLETE").is_file()
 
 
-async def test_image_ids_follow_sorted_order_even_when_calls_finish_out_of_order(tmp_path: Path):
-    """ADR-0010 made classification concurrent. `image_id` must still be bound
-    to the image's position in the sorted source list, not to completion order
-    — `select_images.py` and the C2 fixtures depend on that numbering.
+async def test_image_ids_are_stable_regardless_of_completion_order(tmp_path: Path):
+    """`image_id` must identify the *picture*, not its position in a batch.
+
+    It used to be `{patrol_id}_{index:03d}` over the sorted source list,
+    which is only stable while the input set is. Re-running after more frames
+    arrived rebound every id to a different image, and
+    `Store.insert_analysis`'s `INSERT OR IGNORE` then kept the stale row
+    while `shutil.copyfile` overwrote the picture on disk. Deriving the id
+    from the filename makes it independent of both batch composition and
+    completion order.
 
     The first image is made the slowest, so with any real parallelism it
-    finishes last; `_000` must still be the first file alphabetically.
+    finishes last; its id must still be a.jpg's.
     """
     source_dir = tmp_path / "src"
     for name, color in (("a.jpg", (255, 0, 0)), ("b.jpg", (0, 255, 0)), ("c.jpg", (0, 0, 255))):
@@ -198,7 +220,6 @@ async def test_image_ids_follow_sorted_order_even_when_calls_finish_out_of_order
         calls["n"] += 1
         await asyncio.sleep(delays.get(index, 0.0))
         completion_order.append(f"call{index}")
-        # colour is irrelevant; every call returns the same valid body
         return _mock_classification_response()
 
     client = _mock_client(side_effect=slow_first)
@@ -211,14 +232,94 @@ async def test_image_ids_follow_sorted_order_even_when_calls_finish_out_of_order
     assert completion_order[-1] == "call0", "expected the slowest (first-dispatched) call to finish last"
 
     analysis_dir = data_root / "analysis" / PATROL_ID
-    written = sorted(p.name for p in analysis_dir.glob("*.json"))
-    assert written == [f"{PATROL_ID}_000.json", f"{PATROL_ID}_001.json", f"{PATROL_ID}_002.json"]
+    written = sorted(p.stem for p in analysis_dir.glob("*.json"))
+    assert written == sorted(image_id_for(PATROL_ID, source_dir / n) for n in ("a.jpg", "b.jpg", "c.jpg"))
 
-    # _000 must be a.jpg's result -- the first source file by sort order --
-    # even though its call completed last.
-    first = json.loads((analysis_dir / f"{PATROL_ID}_000.json").read_text(encoding="utf-8"))
-    assert first["image_path"] == f"images/{PATROL_ID}/{PATROL_ID}_000.jpg"
-    assert first["captured_at_ms"] == int((source_dir / "a.jpg").stat().st_mtime * 1000)
+    a_id = image_id_for(PATROL_ID, source_dir / "a.jpg")
+    first = json.loads((analysis_dir / f"{a_id}.json").read_text(encoding="utf-8"))
+    assert first["image_path"] == f"images/{PATROL_ID}/{a_id}.jpg"
+    assert first["captured_at_ms"] == capture_ts_ms(source_dir / "a.jpg")
+
+
+async def test_rerun_skips_already_classified_images(tmp_path: Path):
+    """The ledger is what replaced the START/STOP window filter: a second run
+    must classify only what arrived since the first, not re-bill the whole
+    directory.
+    """
+    source_dir = tmp_path / "src"
+    _write_fake_source_image(source_dir / "a.jpg", (255, 0, 0))
+    data_root = tmp_path / "data"
+
+    first_client = _mock_client()
+    assert await classify_patrol(
+        PATROL_ID, source_dir, data_root, "gpt-test", client=first_client
+    ) == 1
+    assert first_client.chat.completions.create.await_count == 1
+
+    # A later transfer drops in one more frame.
+    _write_fake_source_image(source_dir / "b.jpg", (0, 255, 0))
+    second_client = _mock_client()
+    assert await classify_patrol(
+        PATROL_ID, source_dir, data_root, "gpt-test", client=second_client
+    ) == 1
+    assert second_client.chat.completions.create.await_count == 1, "a.jpg must not be classified twice"
+
+    analysis_dir = data_root / "analysis" / PATROL_ID
+    assert sorted(p.stem for p in analysis_dir.glob("*.json")) == sorted(
+        image_id_for(PATROL_ID, source_dir / n) for n in ("a.jpg", "b.jpg")
+    )
+
+
+async def test_reclassify_ignores_the_ledger(tmp_path: Path):
+    source_dir = tmp_path / "src"
+    _write_fake_source_image(source_dir / "a.jpg", (255, 0, 0))
+    data_root = tmp_path / "data"
+
+    await classify_patrol(PATROL_ID, source_dir, data_root, "gpt-test", client=_mock_client())
+    again = _mock_client()
+    assert await classify_patrol(
+        PATROL_ID, source_dir, data_root, "gpt-test", client=again, use_ledger=False
+    ) == 1
+    assert again.chat.completions.create.await_count == 1
+
+
+async def test_stale_complete_marker_is_cleared_before_reclassifying(tmp_path: Path):
+    """A marker left by an earlier run would let `VisWatcher.watch` return
+    before this run has written anything at all.
+    """
+    source_dir = tmp_path / "src"
+    _write_fake_source_image(source_dir / "a.jpg", (255, 0, 0))
+    data_root = tmp_path / "data"
+    analysis_dir = data_root / "analysis" / PATROL_ID
+    analysis_dir.mkdir(parents=True)
+    marker = analysis_dir / "_COMPLETE"
+    marker.touch()
+    stale_mtime = marker.stat().st_mtime_ns
+
+    await classify_patrol(PATROL_ID, source_dir, data_root, "gpt-test", client=_mock_client())
+
+    assert marker.is_file()
+    assert marker.stat().st_mtime_ns != stale_mtime, "marker should have been recreated, not left in place"
+
+
+async def test_complete_marker_is_written_even_when_the_run_fails_at_startup(tmp_path: Path):
+    """`_COMPLETE` lives in a `finally`. It used to sit after the try, so an
+    unset API key or a vanished source directory skipped it entirely and left
+    `ai_report` blocking for the whole VIS_COMPLETE_TIMEOUT_S.
+    """
+    data_root = tmp_path / "data"
+    missing_source = tmp_path / "not_there"
+
+    try:
+        await classify_patrol(
+            PATROL_ID, missing_source, data_root, "gpt-test", client=_mock_client()
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("expected the missing source directory to propagate")
+
+    assert (data_root / "analysis" / PATROL_ID / "_COMPLETE").is_file()
 
 
 async def test_concurrency_is_bounded_by_the_semaphore(tmp_path: Path):
@@ -305,10 +406,17 @@ async def test_patrol_window_filters_on_capture_time_not_upload_time(tmp_path: P
     )
 
     assert count == 1, "the in-window frame must survive despite a much later mtime"
+    inside_id = image_id_for(PATROL_ID, source_dir / _capture_name(inside))
     written = json.loads(
-        (data_root / "analysis" / PATROL_ID / f"{PATROL_ID}_000.json").read_text(encoding="utf-8")
+        (data_root / "analysis" / PATROL_ID / f"{inside_id}.json").read_text(encoding="utf-8")
     )
     assert written["captured_at_ms"] == _expected_ms(inside)
+
+
+def _clock(stamp: str) -> str:
+    """`20260824_172947` -> `17:29:47`, as `FrameContext.as_prompt_text` renders it."""
+    hhmmss = stamp.split("_")[1]
+    return f"{hhmmss[0:2]}:{hhmmss[2:4]}:{hhmmss[4:6]}"
 
 
 async def test_frame_context_is_sent_with_the_image(tmp_path: Path):
@@ -335,7 +443,92 @@ async def test_frame_context_is_sent_with_the_image(tmp_path: Path):
     joined = "\n".join(texts)
     assert "3장" in joined and "1번째" in joined and "3번째" in joined
     assert "17:29:47" in joined, "capture time should come from the filename"
-    assert "첫 프레임" in texts[0]
-    assert "1.0초" in texts[1], "gap to the previous frame"
+    # Matched by content, not by position: calls complete concurrently, so
+    # `await_args_list` order is completion order. What must hold is that the
+    # *earliest* frame is the one told it has no predecessor.
+    by_time = {stamp[-6:]: next(t for t in texts if _clock(stamp) in t) for stamp in stamps}
+    assert "첫 프레임" in by_time["172947"]
+    assert sum("첫 프레임" in t for t in texts) == 1, "only the earliest frame has no predecessor"
+    # Each later frame is told its gap to the one before it.
+    assert "1.0초" in by_time["172948"], "gap to the previous frame"
+    assert "1.0초" in by_time["172949"], "gap to the previous frame"
     # The rule that motivated this: a bisected crop is one observation.
     assert "하나의 관측으로" in joined
+
+
+def test_classification_schema_carries_no_unsupported_keywords():
+    """OpenAI's strict structured-output mode rejects numeric bound keywords.
+
+    Pydantic emits them for every `Field(ge=..., le=...)`, which
+    `Detection.count`/`confidence` and `ImageClassification.image_quality` all
+    use. An unsupported keyword is a 400 on *every* image, and `classify_one`
+    logs that as an ordinary per-image skip -- so a total failure would look
+    exactly like an empty patrol. The bounds are still enforced on the way
+    back in, by `ImageClassification.model_validate_json`.
+    """
+    from vision.image_analysis.system.classify import _classification_schema
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                assert key not in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"), (
+                    f"strict mode rejects {key!r}"
+                )
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    schema = _classification_schema()
+    walk(schema)
+    # The strictness that *is* required must survive the strip.
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"image_quality", "detections"}
+    assert schema["$defs"]["Detection"]["additionalProperties"] is False
+
+
+def test_detection_bounds_are_still_enforced_after_parsing():
+    """Stripping the bounds from the request schema must not weaken validation."""
+    from vision.image_analysis.system.classify import ImageClassification
+
+    with pytest.raises(ValidationError):
+        ImageClassification.model_validate(
+            {"image_quality": 1.5, "detections": []}
+        )
+
+
+async def test_same_second_frames_get_a_deterministic_order(tmp_path: Path):
+    """`capture.py::next_filepath` deliberately supports several frames inside
+    one second (seq 001, 002, ...), and the dashboard can drive the interval
+    down to 0.2s. A second-resolution stamp alone is therefore neither unique
+    nor an ordering key, so `capture_sort_key` pairs it with the sequence.
+    """
+    source_dir = tmp_path / "received"
+    names = [
+        "20260824_172947_cam01_003.jpg",
+        "20260824_172947_cam01_001.jpg",
+        "20260824_172947_cam01_002.jpg",
+    ]
+    for name in names:
+        _write_fake_source_image(source_dir / name, (200, 30, 30))
+
+    client = _mock_client()
+    # concurrency=1 so dispatch order is observable; the ordering itself is a
+    # property of `capture_sort_key`, not of how many calls are in flight.
+    await classify_patrol(
+        PATROL_ID, source_dir, tmp_path / "data", "gpt-test", client=client, concurrency=1
+    )
+
+    sent = [
+        call.kwargs["messages"][1]["content"][0]["text"]
+        for call in client.chat.completions.create.await_args_list
+    ]
+    frame_positions = [text.split("장 가운데 ")[1].split("번째")[0] for text in sent]
+    assert frame_positions == ["1", "2", "3"], "frames must be ordered by capture sequence"
+
+    # And the id bound to each frame follows the same order, independent of
+    # how the calls happened to complete.
+    analysis_dir = tmp_path / "data" / "analysis" / PATROL_ID
+    assert sorted(p.stem for p in analysis_dir.glob("*.json")) == sorted(
+        image_id_for(PATROL_ID, source_dir / n) for n in names
+    )

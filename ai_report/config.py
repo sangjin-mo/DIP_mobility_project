@@ -42,15 +42,28 @@ class Settings(BaseSettings):
 
     # Ingest behaviour.
     # VIS_COMPLETE_TIMEOUT_S is a give-up ceiling, not a delay: `_COMPLETE` is
-    # written by `vision/image_analysis/system/classify.py` the moment it
-    # finishes (ADR-0010), so the watcher returns then and the ceiling only
-    # applies when classify never ran or died before touching the marker.
-    # Cut from 600 to 120 for demo runs -- with a short track the interesting
-    # question is "how fast do I find out it broke", not "how long can VIS
-    # take". Override in .env if a patrol's classification legitimately runs
-    # longer (classify.py is sequential: roughly 2-6s per captured image).
-    VIS_COMPLETE_TIMEOUT_S: int = 120
+    # written by `vision/image_analysis/system/classify.py` from a `finally`
+    # (ADR-0010), so the watcher returns as soon as that process stops --
+    # including when it failed at startup -- and the ceiling only applies when
+    # classify never ran at all, or was killed outright.
+    #
+    # Sized for the worst realistic patrol rather than the typical one. At
+    # CLASSIFY_CONCURRENCY=8 and roughly 2-6s per vision call, 300s covers
+    # ~400-1200 images; the dashboard can drive the capture interval down to
+    # 0.2s (vision/image_transfer/system/pi_agent/config.py's
+    # MIN_CAPTURE_INTERVAL_SEC), which is 5 frames/sec, so a few minutes of
+    # capture reaches several hundred frames. Timing out early is not a
+    # graceful degradation here: it silently truncates the report to whatever
+    # was written so far, with no record of which frames were dropped.
+    VIS_COMPLETE_TIMEOUT_S: int = 300
     VIS_WATCHER_POLL_INTERVAL_S: float = 1.0
+
+    # How many images classify.py holds in flight. One vision call per image,
+    # so this is the knob that trades patrol latency against the account's
+    # per-minute request limit -- it lives here, not in classify.py's module
+    # body, so retuning it after a rate-limit error is a .env change rather
+    # than a code change (GUIDELINES.md: "No magic numbers in module bodies").
+    CLASSIFY_CONCURRENCY: int = 8
 
     # Pipeline (used from A2 onward; declared now so the surface matches spec §3)
     IMAGES_PER_ZONE_MAX: int = 3
