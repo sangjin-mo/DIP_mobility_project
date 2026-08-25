@@ -97,7 +97,13 @@ def write_report(
         _write_files(tmp_dir, report_md, metadata)
         for write_extra in extra_writers or []:
             write_extra(tmp_dir)
-    except OSError:
+    except Exception:
+        # Not just OSError: an `extra_writer` is arbitrary caller code
+        # (`copy_and_resize_images` runs PIL, `write_payload` runs Pydantic
+        # serialisation) and can fail with anything. Catching only OSError
+        # left `.tmp_{patrol_id}` behind on every other failure, contradicting
+        # this function's own promise below. The previous report is still
+        # untouched either way -- nothing has been renamed yet.
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 

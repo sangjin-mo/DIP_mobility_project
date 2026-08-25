@@ -255,3 +255,39 @@ def test_segment_by_crop_type_empty_input_produces_no_windows():
     assert seg.zones() == []
     assert seg.patrol_start_ts_ms == 0
     assert seg.patrol_end_ts_ms == 0
+
+
+def test_segment_by_crop_type_reports_drive_obstructions_once():
+    """`obstruction_counts()` was unconditionally empty on this path.
+
+    Crop-type windows carried no events at all, so the report's 통로 장애 요인
+    section and `Payload.obstructions` could never be populated on the only
+    segmentation path production uses — the LLM was never told about a single
+    emergency stop or line loss. Every window spans the whole patrol, so the
+    events attach to one zone rather than all of them; attaching to all would
+    multiply each event by the number of crop types.
+    """
+    events = [
+        event(0, 0, EventType.PATROL_START),
+        event(1, 1500, EventType.EMERGENCY_STOP),
+        event(2, 2500, EventType.LINE_LOST),
+        event(3, 5000, EventType.PATROL_END),
+    ]
+    images = [
+        analysis("a", 1000, [detection("tomato", 4)]),
+        analysis("c", 3000, [detection("chili_pepper", 1)]),
+    ]
+
+    seg = segment_by_crop_type(PATROL_ID, events, images)
+    counts = seg.obstruction_counts()
+
+    assert counts == {1: {"EMERGENCY_STOP": 1, "LINE_LOST": 1}}
+    total = sum(n for per_zone in counts.values() for n in per_zone.values())
+    assert total == 2, "each drive event must be counted once, not once per crop type"
+
+
+def test_segment_by_crop_type_reports_nothing_when_there_were_no_obstructions():
+    events = [event(0, 0, EventType.PATROL_START), event(1, 5000, EventType.PATROL_END)]
+    images = [analysis("a", 1000, [detection("tomato", 4)])]
+
+    assert segment_by_crop_type(PATROL_ID, events, images).obstruction_counts() == {}

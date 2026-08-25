@@ -211,3 +211,65 @@ async def test_undetermined_zone_gets_recapture_note_not_diagnosis_when_mocked_c
     output, _metadata = await generate_report(make_payload(), {}, valid_zone_ids={1}, settings=settings, client=client)
     assert "재촬영" in output.zones[0].growth_note_ko
     assert _scan_prohibited_language(output) == []
+
+
+def _zone(zone_id: int, zone_name: str, image_ids: list[str]):
+    from ai_report.models import ZoneEnv, ZoneMetadata
+
+    return ZoneMetadata(
+        zone_id=zone_id, zone_name=zone_name, status=ReportStatus.NORMAL,
+        env=ZoneEnv(), observations={}, undetermined_rate=None, flags=[],
+        image_ids=image_ids, confidence="low",
+    )
+
+
+async def test_each_image_is_labelled_with_its_zone():
+    """The prompt asks for per-zone `visual_findings_ko`, but images used to
+    arrive as an unlabelled run of `image_url` blocks -- nothing told the
+    model which picture came from which zone, so any per-zone visual finding
+    was attributed by guesswork. The mapping was always in
+    `payload.zones[].image_ids`; it just was not being sent.
+    """
+    settings = get_settings()
+    payload = make_payload(zones=[
+        _zone(1, "토마토구역", ["img_b"]),
+        _zone(2, "고추구역", ["img_a"]),
+    ])
+    client = mock_client(return_value=mock_response(valid_output_dict([1, 2])))
+
+    await generate_report(
+        payload, {"img_a": b"\xff\xd8a", "img_b": b"\xff\xd8b"},
+        valid_zone_ids={1, 2}, settings=settings, client=client,
+    )
+
+    content = client.chat.completions.create.await_args.kwargs["messages"][1]["content"]
+    labels = [block["text"] for block in content if block["type"] == "text"]
+
+    # Ordered by zone, not by dict insertion order: img_b (zone 1) precedes
+    # img_a (zone 2) even though img_a was inserted first.
+    assert "zone_id=1" in labels[1] and "img_b" in labels[1] and "토마토구역" in labels[1]
+    assert "zone_id=2" in labels[2] and "img_a" in labels[2] and "고추구역" in labels[2]
+
+    # Every label is immediately followed by the image it describes.
+    kinds = [block["type"] for block in content]
+    assert kinds == ["text", "text", "image_url", "text", "image_url"]
+
+
+async def test_image_with_no_resolvable_zone_is_labelled_as_such_and_sent_last():
+    """`load_selected_images` keys on image_id; a byte map entry with no
+    matching zone must still be sent, but must not be silently attributed to
+    whichever zone happened to come first.
+    """
+    settings = get_settings()
+    payload = make_payload(zones=[_zone(1, "토마토구역", ["known"])])
+    client = mock_client(return_value=mock_response(valid_output_dict([1])))
+
+    await generate_report(
+        payload, {"orphan": b"\xff\xd8o", "known": b"\xff\xd8k"},
+        valid_zone_ids={1}, settings=settings, client=client,
+    )
+
+    content = client.chat.completions.create.await_args.kwargs["messages"][1]["content"]
+    labels = [block["text"] for block in content if block["type"] == "text"]
+    assert "zone_id=1" in labels[1]
+    assert "구역을 특정할 수 없습니다" in labels[2] and "orphan" in labels[2]

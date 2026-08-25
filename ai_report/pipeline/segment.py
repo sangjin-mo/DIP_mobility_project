@@ -373,6 +373,21 @@ def segment_by_crop_type(
         else:
             groups.setdefault(crop_class, []).append(result)
 
+    # Every crop-type window spans the whole patrol (there is no physical
+    # boundary to divide it by), so every drive event falls inside every
+    # window. Attaching them to the *first* real zone rather than to all of
+    # them keeps `obstruction_counts()` from reporting the same
+    # EMERGENCY_STOP once per crop type -- which would inflate the count by
+    # the number of crops. Leaving them off entirely, as before, made
+    # `obstruction_counts()` unconditionally empty: the report's 통로 장애
+    # 요인 section and `Payload.obstructions` could never be populated on the
+    # only segmentation path production uses, so the LLM was never told about
+    # a single emergency stop or line loss.
+    drive_events = [
+        e for e in events_sorted
+        if e.type in (EventType.EMERGENCY_STOP, EventType.LINE_LOST)
+    ]
+
     windows: list[ZoneWindow] = []
     if untagged:
         windows.append(
@@ -385,6 +400,7 @@ def segment_by_crop_type(
                 start_ts_ms=patrol_start_ts_ms,
                 end_ts_ms=patrol_end_ts_ms,
                 analysis=groups[crop_class],
+                events=drive_events if zone_id == 1 else [],
             )
         )
 

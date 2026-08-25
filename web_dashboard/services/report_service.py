@@ -24,16 +24,31 @@ class ReportService:
     def __init__(self, report_root: Path) -> None:
         self._report_root = Path(report_root)
 
-    def list_reports(self) -> list[dict]:
+    def list_patrol_ids(self) -> list[str]:
+        """Patrol ids with a report directory, newest first — names only.
+
+        Cheap: one `iterdir` and a regex per entry, no file reads. Callers
+        that only need the newest renderable report (see
+        `CropReportService.latest`) should walk this and stop at the first
+        one that loads, rather than making `list_reports()` parse and
+        validate every report on disk first.
+        """
         if not self._report_root.is_dir():
             return []
+        return sorted(
+            (
+                directory.name
+                for directory in self._report_root.iterdir()
+                if directory.is_dir() and PATROL_ID_PATTERN.fullmatch(directory.name)
+            ),
+            reverse=True,
+        )
 
+    def list_reports(self) -> list[dict]:
         reports: list[dict] = []
-        for directory in sorted(self._report_root.iterdir(), reverse=True):
-            if not directory.is_dir() or not PATROL_ID_PATTERN.fullmatch(directory.name):
-                continue
+        for patrol_id in self.list_patrol_ids():
             try:
-                reports.append(self.metadata(directory.name))
+                reports.append(self.metadata(patrol_id))
             except (ReportNotFoundError, InvalidReportError):
                 continue
         return reports

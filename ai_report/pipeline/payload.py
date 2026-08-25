@@ -93,8 +93,10 @@ def build_payload(
     known_limitations: list[str] = []
 
     candidate_budgets = (settings.IMAGES_PER_ZONE_MAX, *_DEGRADED_IMAGE_COUNTS)
+    # Seeded only so the names are bound if `candidate_budgets` were ever
+    # empty; the first iteration always overwrites both.
     zones = agg.zones
-    tokens = estimate_tokens(len(zones), sum(len(z.image_ids) for z in zones), settings)
+    tokens = 0
 
     for max_images in candidate_budgets:
         zones = [_truncate_images(z, max_images) for z in agg.zones]

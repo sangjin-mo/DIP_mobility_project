@@ -49,18 +49,61 @@ _PROHIBITED_COUNT_PHRASES = ("개체 수", "그루", "포기")
 _RETRYABLE_EXCEPTIONS = (APITimeoutError, RateLimitError, InternalServerError)
 
 
+def _zone_of_image(payload: Payload) -> dict[str, int]:
+    """`{image_id: zone_id}` for every image any zone selected.
+
+    Built from `payload.zones[].image_ids`, which is the same selection
+    `pipeline/select_images.py::load_selected_images` keyed its byte map by.
+    Called only by `_build_messages`.
+    """
+    return {
+        image_id: zone.zone_id
+        for zone in payload.zones
+        for image_id in zone.image_ids
+    }
+
+
 def _build_messages(payload: Payload, images: dict[str, bytes]) -> list[dict]:
     """System + user messages for the API call.
 
-    The user message is the payload as JSON text, followed by one
-    `image_url` content block per selected image, base64-encoded as a
-    `data:` URI (no image hosting involved — everything is local files).
+    The user message is the payload as JSON text, then — for each selected
+    image — a short text block naming the zone the image belongs to,
+    followed by the image itself, base64-encoded as a `data:` URI (no image
+    hosting involved — everything is local files).
+
+    The label is not decoration. The prompt asks for per-zone
+    `visual_findings_ko`, and the schema has a `zones[]` entry per zone, but
+    the images used to arrive as an unlabelled run of `image_url` blocks:
+    nothing told the model which picture came from which zone, so any
+    per-zone visual finding was attributed by guesswork. The payload lists
+    `zones[].image_ids`, so the mapping was always available — it just was
+    not being sent.
+
+    Images are emitted in `payload.zones` order (an image whose zone cannot
+    be resolved goes last, labelled as unattributed) so the sequence the
+    model sees matches the order the zones appear in the JSON above it.
     Called only by `generate_report`.
     """
     payload_json = json.dumps(payload.model_dump(mode="json"), ensure_ascii=False)
     content: list[dict] = [{"type": "text", "text": payload_json}]
-    for data in images.values():
-        b64 = base64.b64encode(data).decode("ascii")
+
+    zone_of = _zone_of_image(payload)
+    zone_name_of = {zone.zone_id: zone.zone_name for zone in payload.zones}
+    ordered = sorted(images, key=lambda image_id: (zone_of.get(image_id, 10**9), image_id))
+
+    for image_id in ordered:
+        zone_id = zone_of.get(image_id)
+        if zone_id is None:
+            label = f"다음 사진(image_id={image_id})은 구역을 특정할 수 없습니다."
+        else:
+            zone_name = zone_name_of.get(zone_id, f"{zone_id}구역")
+            label = (
+                f"다음 사진은 {zone_name}(zone_id={zone_id})에서 촬영된 것이며 "
+                f"image_id는 {image_id}입니다. 이 사진에 대한 시각적 소견은 "
+                f"zone_id={zone_id} 항목에 기술하십시오."
+            )
+        b64 = base64.b64encode(images[image_id]).decode("ascii")
+        content.append({"type": "text", "text": label})
         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
     return [

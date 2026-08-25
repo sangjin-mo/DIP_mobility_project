@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from web_dashboard.services.report_service import ReportNotFoundError, ReportService
+from web_dashboard.services.report_service import (
+    InvalidReportError,
+    ReportNotFoundError,
+    ReportService,
+)
 
 
 class CropReportService:
@@ -10,10 +14,19 @@ class CropReportService:
         self._reports = reports
 
     def latest(self) -> dict:
-        for metadata in self._reports.list_reports():
+        """Newest report the dashboard can render, or an empty placeholder.
+
+        Walks patrol ids newest-first and stops at the first one that has
+        both a valid `metadata.json` and a `report.md`. Deliberately not
+        `list_reports()`: that parses and Pydantic-validates *every* report
+        under REPORT_ROOT, and this method then discarded all of them and
+        re-parsed the newest one through `get()` — 2N+1 parses per dashboard
+        load to display one report.
+        """
+        for patrol_id in self._reports.list_patrol_ids():
             try:
-                return self.get(metadata["patrol_id"])
-            except ReportNotFoundError:
+                return self.get(patrol_id)
+            except (ReportNotFoundError, InvalidReportError):
                 continue
         return {
             "available": False,

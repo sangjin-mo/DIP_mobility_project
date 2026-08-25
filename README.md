@@ -21,10 +21,12 @@ was reversed at least once. Do not write one for routine implementation choices.
 | [0007](0007-piracer-platform.md) | Platform is Waveshare PiRacer | Accepted |
 | [0008](0008-schema-first-contracts.md) | Contracts are JSON Schema files, not prose | Accepted |
 | [0009](ADR-0009-llm-inferred-crop-zones.md) | Infer crop zones with the LLM when DR sends no events | Accepted |
-| [0010](ADR-0010-llm-does-the-analysis.md) | The LLM does the crop analysis, not VIS | Accepted |
+| [0010](ADR-0010-llm-does-the-analysis.md) | The LLM does the crop analysis, not VIS | Accepted (Decision amended by 0011) |
+| [0011](ADR-0011-classify-by-ledger-not-drive-window.md) | Scope classification by a ledger, not the drive window | Accepted |
 
 > [!NOTE]
 > 0001–0008 are indexed here but their files are not in the repo; they were
-> never committed. 0009 and 0010 are the only records that exist as documents.
+> never committed. 0009, 0010 and 0011 are the only records that exist as
+> documents.
 > Decisions 0003–0006 and 0008 survive in restated form as `GUIDELINES.md`'s
 > hard rules.

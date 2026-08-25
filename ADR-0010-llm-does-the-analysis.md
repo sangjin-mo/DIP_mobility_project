@@ -3,6 +3,13 @@
 Date: 2026-08-25
 Status: Accepted
 
+> [!NOTE]
+> The Decision's last paragraph — auto-classification "scoped to that patrol's own images by `--after-ts-ms`/`--before-ts-ms`" —
+> is amended by [ADR-0011](ADR-0011-classify-by-ledger-not-drive-window.md).
+> That scoping selected nothing on the real system. The Consequences section's
+> "Classification is sequential" and its 120s `VIS_COMPLETE_TIMEOUT_S` are
+> likewise superseded there. Everything else in this record still holds.
+
 ## Context
 
 The original architecture had four teams. VIS owned crop detection: it would
