@@ -7,6 +7,7 @@ aggregation, LLM calls, or report calculations are duplicated here.
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 from pathlib import Path
 
@@ -39,6 +40,8 @@ from web_dashboard.services.vision_service import (
 )
 from web_dashboard.services.vision_state_service import VisionStateService
 from web_dashboard.services.weather_service import KmaWeatherService, WeatherUnavailableError
+
+logger = logging.getLogger(__name__)
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 
@@ -172,12 +175,19 @@ def create_app(
         result = await _control_call(control, DriveCommand.START, speed)
         await _observe_vision_state(vision_state, result)
         result["patrol_id"] = await asyncio.to_thread(patrol_events.start_patrol)
+        result["camera"] = await _set_patrol_capture(
+            vision_state, True, result["patrol_id"]
+        )
         return result
 
     @app.post("/api/control/stop")
     async def stop_rover() -> dict:
         result = await _control_call(control, DriveCommand.STOP)
         await _observe_vision_state(vision_state, result)
+        # Stop the camera before closing the patrol: end_patrol pulls the
+        # images off the Pi, and anything still being written would land
+        # after that fetch and be attributed to the next patrol instead.
+        result["camera"] = await _set_patrol_capture(vision_state, False, None)
         result["patrol_id"] = await asyncio.to_thread(patrol_events.end_patrol)
         return result
 
@@ -383,3 +393,47 @@ async def _control_call(
 async def _observe_vision_state(service: VisionStateService, result: dict) -> None:
     rover_status = result.get("rover") if isinstance(result.get("rover"), dict) else result
     await asyncio.to_thread(service.observe, rover_status)
+
+
+async def _set_patrol_capture(
+    service: VisionStateService, arm: bool, patrol_id: str | None
+) -> dict:
+    """Arm or disarm the webcam Pi's patrol capture, and report the outcome.
+
+    Never raises and never rolls the rover back: by the time this runs the
+    drive command has already been accepted, and a camera that failed to arm
+    is not a reason to leave the rover in an inconsistent state. But it is
+    absolutely a reason to tell the operator *now* -- a patrol driven with the
+    camera off produces a valid, entirely empty report, and the only earlier
+    signal was noticing the report was empty afterwards. The returned dict
+    goes back in the START/STOP response so the dashboard can surface it.
+    """
+    if not service.capture_configured:
+        return {
+            "armed": False,
+            "ok": False,
+            "reason": "웹캠 Pi 촬영 API 주소가 설정되지 않아 카메라를 제어하지 못했습니다.",
+        }
+    try:
+        if arm:
+            result = await asyncio.to_thread(service.start_capture, patrol_id)
+        else:
+            result = await asyncio.to_thread(service.stop_capture)
+    except (ConnectionError, RuntimeError) as exc:
+        logger.warning("camera %s failed: %s", "arm" if arm else "disarm", exc)
+        return {
+            "armed": False,
+            "ok": False,
+            "reason": (
+                f"카메라를 {'시작' if arm else '중지'}하지 못했습니다: {exc}"
+                + ("  이 순찰은 사진 없이 진행됩니다." if arm else "")
+            ),
+        }
+    armed = bool(result.get("armed"))
+    if arm and not armed:
+        return {
+            "armed": False,
+            "ok": False,
+            "reason": "웹캠 Pi가 촬영 시작을 확인해주지 않았습니다. 이 순찰은 사진 없이 진행됩니다.",
+        }
+    return {"armed": armed, "ok": True}

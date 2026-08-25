@@ -29,6 +29,17 @@ _seq = 0
 _interval_lock = threading.Lock()
 _capture_interval_sec = config.CAPTURE_INTERVAL_SEC
 
+# 순찰 촬영 on/off. 대시보드의 START가 켜고 STOP이 끈다 (POST /capture/start, /capture/stop).
+# 기본값은 꺼짐 — 프로세스가 떠 있다는 것만으로 촬영이 시작되면 안 된다.
+_capture_lock = threading.Lock()
+_capture_armed = False
+_armed_patrol_id: str | None = None
+_armed_at_monotonic: float | None = None
+
+
+class StartCaptureRequest(BaseModel):
+    patrol_id: str | None = None
+
 
 class SetIntervalRequest(BaseModel):
     interval_sec: float = Field(gt=0)
@@ -45,6 +56,61 @@ def set_capture_interval(interval_sec: float) -> float:
     with _interval_lock:
         _capture_interval_sec = clamped
     return clamped
+
+
+def arm_capture(patrol_id: str | None) -> dict:
+    """순찰 촬영을 켠다. 대시보드 START가 호출."""
+    global _capture_armed, _armed_patrol_id, _armed_at_monotonic
+    with _capture_lock:
+        _capture_armed = True
+        _armed_patrol_id = patrol_id
+        _armed_at_monotonic = time.monotonic()
+        return {"armed": True, "patrol_id": _armed_patrol_id}
+
+
+def disarm_capture() -> dict:
+    """순찰 촬영을 끈다. 대시보드 STOP이 호출."""
+    global _capture_armed, _armed_patrol_id, _armed_at_monotonic
+    with _capture_lock:
+        was_armed = _capture_armed
+        previous_patrol_id = _armed_patrol_id
+        _capture_armed = False
+        _armed_patrol_id = None
+        _armed_at_monotonic = None
+        return {"armed": False, "was_armed": was_armed, "patrol_id": previous_patrol_id}
+
+
+def capture_state() -> dict:
+    with _capture_lock:
+        return {"armed": _capture_armed, "patrol_id": _armed_patrol_id}
+
+
+def should_capture_now() -> bool:
+    """지금 자동 촬영을 해야 하는지.
+
+    STOP 신호를 못 받은 채로 촬영이 계속되면 디스크가 찬다. 예전에는 차량 상태
+    API를 2초마다 폴링해서 이걸 막았지만, 그 값은 "순찰 중"이 아니라 "주행 프로세스가
+    살아있음"에 가까워서 순찰과 무관하게 촬영이 돌았다(실측: 순찰이 없는
+    17:29-17:31 구간에도 계속 저장됨). 이제는 명시적인 START/STOP만 촬영을
+    제어하고, 안전장치는 최대 순찰 시간으로만 둔다.
+    """
+    global _capture_armed, _armed_patrol_id, _armed_at_monotonic
+    with _capture_lock:
+        if not _capture_armed:
+            return False
+        if _armed_at_monotonic is None:
+            return True
+        if time.monotonic() - _armed_at_monotonic > config.MAX_CAPTURE_SESSION_SEC:
+            print(
+                f"촬영 시작 후 {config.MAX_CAPTURE_SESSION_SEC}초 경과 — STOP 신호를 "
+                "못 받은 것으로 보고 자동 중지합니다.",
+                flush=True,
+            )
+            _capture_armed = False
+            _armed_patrol_id = None
+            _armed_at_monotonic = None
+            return False
+        return True
 
 
 def make_filename(dt: datetime, cam_id: str, seq: int) -> str:
@@ -119,9 +185,12 @@ def ensure_disk_space():
 def is_vehicle_running() -> bool:
     """통합 대시보드의 차량 상태 API(RUNNING/STOPPED)를 읽기 전용으로 조회.
 
-    web_dashboard 코드는 건드리지 않고, 이미 있는 GET /api/control/status만 호출한다.
-    응답을 못 받거나 형식이 이상하면 config.FAIL_OPEN_WHEN_STATUS_UNKNOWN 값을 따른다
-    (기본 False = 확인 안 되면 정지로 간주해서 촬영 안 함).
+    더 이상 자동 촬영의 on/off를 결정하지 않는다. 이 값은 "순찰 중"이 아니라
+    "주행 프로세스가 살아있음"에 가까워서, 순찰과 무관한 구간에도 촬영이 계속
+    돌고 정작 순찰 중에는 안 돌 수 있었다. 촬영 제어는 이제 대시보드가
+    POST /capture/start · /capture/stop으로 직접 보낸다(should_capture_now 참고).
+
+    상태 표시·진단 용도로만 남겨둔다. 호출하는 쪽이 없으면 지워도 된다.
     """
     request = urllib.request.Request(config.CONTROL_STATUS_URL, method="GET")
     try:
@@ -148,6 +217,28 @@ def capture_now():
         return JSONResponse(status_code=500, content={"status": "error", "reason": str(e)})
     print(f"수동 촬영: {result['filepath']}", flush=True)
     return {"status": "ok", "filename": result["filename"]}
+
+
+@control_app.post("/capture/start")
+def start_capture(request: StartCaptureRequest):
+    """대시보드 START → 순찰 촬영 시작. 즉시 반영된다(폴링 대기 없음)."""
+    result = arm_capture(request.patrol_id)
+    print(f"순찰 촬영 시작 (patrol_id={request.patrol_id})", flush=True)
+    return {"status": "ok", **result}
+
+
+@control_app.post("/capture/stop")
+def stop_capture():
+    """대시보드 STOP → 순찰 촬영 중지."""
+    result = disarm_capture()
+    print(f"순찰 촬영 중지 (patrol_id={result['patrol_id']})", flush=True)
+    return {"status": "ok", **result}
+
+
+@control_app.get("/capture/state")
+def get_capture_state():
+    """지금 순찰 촬영 중인지. 대시보드가 START 직후 확인용으로 쓴다."""
+    return {"status": "ok", **capture_state()}
 
 
 @control_app.get("/latest-frame")
@@ -216,9 +307,8 @@ def main():
     total_saved = 0
     consecutive_failures = 0
     last_disk_check = 0.0
-    last_state_check = 0.0
     last_save_ts = 0.0  # 저장 주기 게이팅용 — 프레임 읽기 자체는 이 값과 무관하게 매번 수행
-    vehicle_running = False
+    was_capturing = False
 
     try:
         while True:
@@ -242,17 +332,12 @@ def main():
                 _latest_frame = frame
 
             now_ts = time.monotonic()
-            if now_ts - last_state_check >= config.CONTROL_STATUS_POLL_SEC:
-                new_running = is_vehicle_running()
-                if new_running != vehicle_running:
-                    print(
-                        f"차량 상태 변경 감지 → 촬영 {'시작' if new_running else '중지'}",
-                        flush=True,
-                    )
-                vehicle_running = new_running
-                last_state_check = now_ts
+            capturing = should_capture_now()
+            if capturing != was_capturing:
+                print(f"순찰 촬영 {'시작' if capturing else '중지'}", flush=True)
+                was_capturing = capturing
 
-            if not vehicle_running:
+            if not capturing:
                 continue
 
             if now_ts - last_disk_check >= config.DISK_CHECK_INTERVAL_SEC:

@@ -119,6 +119,31 @@ class VisionStateService:
     def capture_now(self) -> dict:
         return self._request_capture_api("/capture-now", method="POST")
 
+    def start_capture(self, patrol_id: str | None = None) -> dict:
+        """Arm patrol capture on the webcam Pi. Called on START.
+
+        Pushed at the instant the button is pressed rather than discovered by
+        the Pi polling the rover's status. The old arrangement gated capture
+        on `GET /api/control/status` reporting RUNNING, which tracks "the
+        drive process is alive" rather than "a patrol is underway" -- so
+        capture ran during stretches with no patrol at all and could be off
+        during one. It also cost up to one poll interval of lag at each end.
+        """
+        result = self._request_capture_api(
+            "/capture/start", method="POST", payload={"patrol_id": patrol_id}
+        )
+        return {"armed": bool(result.get("armed")), "patrol_id": result.get("patrol_id")}
+
+    def stop_capture(self) -> dict:
+        """Disarm patrol capture on the webcam Pi. Called on STOP."""
+        result = self._request_capture_api("/capture/stop", method="POST")
+        return {"armed": bool(result.get("armed")), "was_armed": bool(result.get("was_armed"))}
+
+    def capture_state(self) -> dict:
+        """Whether the Pi currently considers itself capturing."""
+        result = self._request_capture_api("/capture/state", method="GET")
+        return {"armed": bool(result.get("armed")), "patrol_id": result.get("patrol_id")}
+
     def capture_status(self) -> dict:
         result = self._request_capture_api("/interval", method="GET")
         interval_s = self._required_number(result, "interval_sec")

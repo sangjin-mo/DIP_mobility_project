@@ -25,14 +25,19 @@ SERVER_PORT = 8000
 SERVER_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
 UPLOAD_TIMEOUT_SEC = 3.0
 
-# 차량 구동 상태 확인 (통합 대시보드의 읽기 전용 상태 API, web_dashboard 소유 — 여기서는 조회만 함)
-# state가 "RUNNING"일 때만 촬영·저장하고, 그 외("STOPPED" 등)에는 저장을 건너뜀.
-# 같은 PC에서 통합 대시보드(web_dashboard)가 8080 포트로 떠 있다고 가정 (SERVER_HOST 재사용)
+# 순찰 촬영이 STOP 신호를 못 받았을 때를 대비한 안전장치. 촬영을 시작한 지 이만큼
+# 지나면 자동으로 중지해서 디스크가 차는 걸 막는다. 실제 순찰보다 넉넉해야 한다 —
+# 이 값에 걸리면 순찰 뒷부분이 그냥 안 찍힌다.
+MAX_CAPTURE_SESSION_SEC = 1800  # 30분
+
+# 차량 구동 상태 확인 (통합 대시보드의 읽기 전용 상태 API, web_dashboard 소유 — 조회만 함).
+# 2026-08-25부터 자동 촬영의 on/off는 이 값이 아니라 대시보드가 보내는
+# POST /capture/start · /capture/stop이 결정한다. 이 상태값은 "순찰 중"이 아니라
+# "주행 프로세스가 살아있음"에 가까워서 순찰 경계와 맞지 않았다.
+# 아래 설정은 진단·표시 용도로만 남겨둔다.
 CONTROL_STATUS_URL = f"http://{SERVER_HOST}:8080/api/control/status"
-CONTROL_STATUS_POLL_SEC = 2.0  # 상태를 얼마나 자주 다시 확인할지
+CONTROL_STATUS_POLL_SEC = 2.0
 CONTROL_STATUS_TIMEOUT_SEC = 2.0
-# 상태 API를 못 읽었을 때(연결 끊김, 형식 오류 등) 촬영을 계속할지 여부.
-# False면 "확인 안 되면 정지로 간주"(안전 우선, 저장공간 낭비 방지) — 기본값 권장
 FAIL_OPEN_WHEN_STATUS_UNKNOWN = False
 
 # 수동 단발 촬영 API (capture.py 자신이 띄움, 카메라를 이미 잡고 있는 프로세스라서

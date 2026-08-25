@@ -568,3 +568,113 @@ def test_weather_refresh_api_bypasses_server_cache(tmp_path):
 
     assert response.status_code == 200
     get_weather.assert_called_once_with(True)
+
+
+def _control_app(tmp_path):
+    return create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data",
+            REPORT_ROOT=tmp_path / "reports",
+            LLM_ENABLED=False,
+        ),
+        dashboard_settings=DashboardSettings(
+            ROVER_CONTROL_URL="http://rover.local:9200/api/control",
+            VISION_PI_CAPTURE_URL="http://webcam.local:8002",
+            AI_REPORT_EVENT_URL="",  # patrol events off; this is about the camera
+        ),
+    )
+
+
+def test_start_arms_the_camera_and_stop_disarms_it(tmp_path):
+    """Pressing START must start photography and STOP must end it.
+
+    Capture used to be gated on the Pi polling the rover's status endpoint,
+    which reports "the drive process is alive" rather than "a patrol is
+    underway" -- so it ran outside patrols and could be off during one.
+    """
+    app = _control_app(tmp_path)
+    running = {"state": "RUNNING", "target_speed_mps": 0.3}
+
+    with (
+        patch("web_dashboard.app.RoverControlService.send", return_value=running),
+        patch(
+            "web_dashboard.app.VisionStateService.start_capture",
+            return_value={"armed": True, "patrol_id": None},
+        ) as start_capture,
+        patch(
+            "web_dashboard.app.VisionStateService.stop_capture",
+            return_value={"armed": False, "was_armed": True},
+        ) as stop_capture,
+        TestClient(app) as client,
+    ):
+        started = client.post("/api/control/start", json={"target_speed_mps": 0.3})
+        stopped = client.post("/api/control/stop")
+
+    start_capture.assert_called_once()
+    stop_capture.assert_called_once()
+    assert started.json()["camera"] == {"armed": True, "ok": True}
+    assert stopped.json()["camera"] == {"armed": False, "ok": True}
+
+
+def test_start_reports_a_camera_that_failed_to_arm_without_failing_the_rover(tmp_path):
+    """A patrol driven with the camera off produces a valid, entirely empty
+    report. The operator has to learn that at START, not by noticing the
+    report was empty afterwards -- but the rover has already accepted the
+    drive command, so this must not fail the request.
+    """
+    app = _control_app(tmp_path)
+
+    with (
+        patch(
+            "web_dashboard.app.RoverControlService.send",
+            return_value={"state": "RUNNING", "target_speed_mps": 0.3},
+        ),
+        patch(
+            "web_dashboard.app.VisionStateService.start_capture",
+            side_effect=ConnectionError("웹캠 Pi에 연결할 수 없습니다"),
+        ),
+        TestClient(app) as client,
+    ):
+        started = client.post("/api/control/start", json={"target_speed_mps": 0.3})
+
+    assert started.status_code == 200, "the rover already started; this must not 500"
+    camera = started.json()["camera"]
+    assert camera["ok"] is False and camera["armed"] is False
+    assert "사진 없이" in camera["reason"]
+
+
+def test_camera_is_stopped_before_the_patrol_is_closed(tmp_path):
+    """Order matters on STOP: closing the patrol fetches the images off the
+    Pi, so anything still being written would land after that fetch and be
+    attributed to the next patrol instead.
+    """
+    app = create_app(
+        ai_settings=Settings(
+            DATA_ROOT=tmp_path / "data", REPORT_ROOT=tmp_path / "reports", LLM_ENABLED=False
+        ),
+        dashboard_settings=DashboardSettings(
+            ROVER_CONTROL_URL="http://rover.local:9200/api/control",
+            VISION_PI_CAPTURE_URL="http://webcam.local:8002",
+            AI_REPORT_EVENT_URL="http://127.0.0.1:9101/api/events",
+        ),
+    )
+    order = []
+
+    with (
+        patch(
+            "web_dashboard.app.RoverControlService.send",
+            return_value={"state": "STOPPED", "target_speed_mps": 0.0},
+        ),
+        patch(
+            "web_dashboard.app.VisionStateService.stop_capture",
+            side_effect=lambda: (order.append("camera_off"), {"armed": False})[1],
+        ),
+        patch(
+            "web_dashboard.app.PatrolEventService.end_patrol",
+            side_effect=lambda: (order.append("patrol_closed"), None)[1],
+        ),
+        TestClient(app) as client,
+    ):
+        client.post("/api/control/stop")
+
+    assert order == ["camera_off", "patrol_closed"]
